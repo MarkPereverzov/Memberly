@@ -1,5 +1,5 @@
 """
-Менеджер пользовательских аккаунтов Telegram
+Telegram user account manager
 """
 import asyncio
 import logging
@@ -15,30 +15,30 @@ from config.config import UserAccount, ConfigManager
 logger = logging.getLogger(__name__)
 
 class AccountManager:
-    """Менеджер пользовательских аккаунтов для приглашений"""
+    """User account manager for invitations"""
     
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
         self.clients: Dict[str, Client] = {}
         self.accounts: List[UserAccount] = []
         
-        # Получаем абсолютный путь к директории сессий
+        # Get absolute path to sessions directory
         import os
         script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         self.session_dir = os.path.join(script_dir, "data", "sessions")
         
     async def initialize(self):
-        """Инициализация менеджера аккаунтов"""
+        """Initialize account manager"""
         self.accounts = self.config_manager.load_accounts()
-        logger.info(f"Загружено {len(self.accounts)} аккаунтов")
+        logger.info(f"Loaded {len(self.accounts)} accounts")
         
-        # Создаем клиентов для каждого аккаунта
+        # Create clients for each account
         for account in self.accounts:
             if account.is_active:
                 await self._create_client(account)
     
     async def _create_client(self, account: UserAccount) -> Optional[Client]:
-        """Создание клиента Pyrogram для аккаунта"""
+        """Create Pyrogram client for account"""
         try:
             client = Client(
                 name=account.session_name,
@@ -48,48 +48,48 @@ class AccountManager:
                 workdir=self.session_dir
             )
             
-            # Подключаемся к аккаунту
+            # Connect to account
             await client.start()
             
-            # Проверяем, что аккаунт активен
+            # Check that account is active
             me = await client.get_me()
-            logger.info(f"Аккаунт {account.session_name} подключен: {me.first_name} (@{me.username})")
+            logger.info(f"Account {account.session_name} connected: {me.first_name} (@{me.username})")
             
             self.clients[account.session_name] = client
             return client
             
         except AuthKeyUnregistered:
-            logger.error(f"Аккаунт {account.session_name}: Неверный ключ авторизации")
+            logger.error(f"Account {account.session_name}: Invalid authorization key")
             account.is_active = False
         except UserDeactivated:
-            logger.error(f"Аккаунт {account.session_name}: Аккаунт деактивирован")
+            logger.error(f"Account {account.session_name}: Account deactivated")
             account.is_active = False
         except SessionPasswordNeeded:
-            logger.error(f"Аккаунт {account.session_name}: Требуется 2FA пароль")
+            logger.error(f"Account {account.session_name}: 2FA password required")
             account.is_active = False
         except Exception as e:
-            logger.error(f"Ошибка подключения аккаунта {account.session_name}: {e}")
+            logger.error(f"Account connection error {account.session_name}: {e}")
             account.is_active = False
         
         return None
     
     def get_available_account(self, group_id: int = None) -> Optional[UserAccount]:
-        """Получение доступного аккаунта для приглашения"""
+        """Get available account for invitation"""
         available_accounts = []
         
         for account in self.accounts:
             if not account.is_active:
                 continue
                 
-            # Проверяем, не превышен ли дневной лимит
-            if account.daily_invites_count >= 50:  # Лимит приглашений в день
+            # Check if daily limit is not exceeded
+            if account.daily_invites_count >= 50:  # Daily invitation limit
                 continue
                 
-            # Проверяем кулдаун аккаунта
-            if time.time() - account.last_used < 60:  # 1 минута между использованиями
+            # Check account cooldown
+            if time.time() - account.last_used < 60:  # 1 minute between uses
                 continue
                 
-            # Если указана группа, проверяем, назначен ли аккаунт на эту группу
+            # If group is specified, check if account is assigned to this group
             if group_id and account.groups_assigned:
                 if group_id not in account.groups_assigned:
                     continue
@@ -99,47 +99,47 @@ class AccountManager:
         if not available_accounts:
             return None
         
-        # Выбираем аккаунт с наименьшим количеством приглашений за день
+        # Select account with least invitations per day
         return min(available_accounts, key=lambda x: x.daily_invites_count)
     
     async def send_invite(self, account: UserAccount, user_id: int, group_link: str) -> bool:
-        """Отправка приглашения пользователю"""
+        """Send invitation to user"""
         client = self.clients.get(account.session_name)
         if not client:
-            logger.error(f"Клиент для аккаунта {account.session_name} не найден")
+            logger.error(f"Client for account {account.session_name} not found")
             return False
         
         try:
-            # Отправляем приглашение
-            message_text = f"🎉 Привет! Приглашаю тебя присоединиться к нашей группе: {group_link}"
+            # Send invitation
+            message_text = f"🎉 Hello! I invite you to join our group: {group_link}"
             
             await client.send_message(user_id, message_text)
             
-            # Обновляем статистику аккаунта
+            # Update account statistics
             account.last_used = time.time()
             account.daily_invites_count += 1
             
-            # Сохраняем изменения
+            # Save changes
             self.config_manager.save_accounts(self.accounts)
             
-            logger.info(f"Приглашение отправлено пользователю {user_id} через аккаунт {account.session_name}")
+            logger.info(f"Invitation sent to user {user_id} via account {account.session_name}")
             return True
             
         except FloodWait as e:
-            logger.warning(f"FloodWait для аккаунта {account.session_name}: ждем {e.value} секунд")
-            # Деактивируем аккаунт временно
+            logger.warning(f"FloodWait for account {account.session_name}: waiting {e.value} seconds")
+            # Temporarily deactivate account
             account.is_active = False
-            # Можно добавить логику для реактивации через определенное время
+            # Can add logic for reactivation after certain time
             await asyncio.sleep(e.value)
             account.is_active = True
             return False
             
         except Exception as e:
-            logger.error(f"Ошибка отправки приглашения через {account.session_name}: {e}")
+            logger.error(f"Error sending invitation via {account.session_name}: {e}")
             return False
     
     async def check_user_in_group(self, account: UserAccount, user_id: int, group_id: int) -> bool:
-        """Проверка, состоит ли пользователь в группе"""
+        """Check if user is in group"""
         client = self.clients.get(account.session_name)
         if not client:
             return False
@@ -148,11 +148,11 @@ class AccountManager:
             member = await client.get_chat_member(group_id, user_id)
             return member.status in ["member", "administrator", "creator"]
         except Exception as e:
-            logger.debug(f"Пользователь {user_id} не найден в группе {group_id}: {e}")
+            logger.debug(f"User {user_id} not found in group {group_id}: {e}")
             return False
     
     async def get_group_invite_link(self, account: UserAccount, group_id: int) -> Optional[str]:
-        """Получение ссылки-приглашения для группы"""
+        """Get invitation link for group"""
         client = self.clients.get(account.session_name)
         if not client:
             return None
@@ -162,35 +162,35 @@ class AccountManager:
             if chat.invite_link:
                 return chat.invite_link
             
-            # Если ссылки нет, пытаемся создать
+            # If no link exists, try to create one
             invite_link = await client.create_chat_invite_link(group_id)
             return invite_link.invite_link
             
         except Exception as e:
-            logger.error(f"Ошибка получения ссылки для группы {group_id}: {e}")
+            logger.error(f"Error getting link for group {group_id}: {e}")
             return None
     
     def reset_daily_stats(self):
-        """Сброс дневной статистики (вызывать раз в день)"""
+        """Reset daily statistics (call once per day)"""
         for account in self.accounts:
             account.daily_invites_count = 0
         
         self.config_manager.save_accounts(self.accounts)
-        logger.info("Дневная статистика аккаунтов сброшена")
+        logger.info("Daily account statistics reset")
     
     async def shutdown(self):
-        """Завершение работы менеджера"""
+        """Shutdown manager"""
         for client in self.clients.values():
             try:
                 await client.stop()
             except Exception as e:
-                logger.error(f"Ошибка при отключении клиента: {e}")
+                logger.error(f"Error disconnecting client: {e}")
         
         self.clients.clear()
-        logger.info("Все клиенты отключены")
+        logger.info("All clients disconnected")
     
     def get_account_stats(self) -> Dict:
-        """Получение статистики аккаунтов"""
+        """Get account statistics"""
         total_accounts = len(self.accounts)
         active_accounts = len([acc for acc in self.accounts if acc.is_active])
         total_daily_invites = sum(acc.daily_invites_count for acc in self.accounts)
@@ -212,15 +212,15 @@ class AccountManager:
         }
     
     async def test_account_connection(self, session_name: str) -> bool:
-        """Тестирование подключения аккаунта"""
+        """Test account connection"""
         client = self.clients.get(session_name)
         if not client:
             return False
         
         try:
             me = await client.get_me()
-            logger.info(f"Тест подключения {session_name}: OK ({me.first_name})")
+            logger.info(f"Connection test {session_name}: OK ({me.first_name})")
             return True
         except Exception as e:
-            logger.error(f"Тест подключения {session_name}: FAILED ({e})")
+            logger.error(f"Connection test {session_name}: FAILED ({e})")
             return False

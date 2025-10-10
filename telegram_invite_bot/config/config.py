@@ -1,5 +1,5 @@
 """
-Конфигурация для бота-приглашающего
+Configuration for invite bot
 """
 import os
 from dataclasses import dataclass
@@ -8,20 +8,20 @@ import json
 
 @dataclass
 class BotConfig:
-    """Основная конфигурация бота"""
+    """Main bot configuration"""
     bot_token: str
     admin_user_ids: List[int]
     whitelist_user_ids: List[int]
-    invite_cooldown_seconds: int = 300  # 5 минут между приглашениями
-    group_cooldown_seconds: int = 60    # 1 минута между приглашениями в разные группы
-    max_invites_per_day: int = 50       # Максимум приглашений в день на пользователя
+    invite_cooldown_seconds: int = 300  # 5 minutes between invitations
+    group_cooldown_seconds: int = 60    # 1 minute between invitations to different groups
+    max_invites_per_day: int = 50       # Maximum invitations per day per user
     
     @classmethod
     def from_env(cls):
-        """Загрузка конфигурации из переменных окружения"""
+        """Load configuration from environment variables"""
         bot_token = os.getenv('BOT_TOKEN')
         if not bot_token:
-            raise ValueError("BOT_TOKEN не найден в переменных окружения")
+            raise ValueError("BOT_TOKEN not found in environment variables")
         
         admin_ids = os.getenv('ADMIN_USER_IDS', '').split(',')
         admin_user_ids = [int(id.strip()) for id in admin_ids if id.strip().isdigit()]
@@ -40,7 +40,7 @@ class BotConfig:
 
 @dataclass
 class UserAccount:
-    """Конфигурация пользовательского аккаунта Telegram"""
+    """Telegram user account configuration"""
     session_name: str
     api_id: int
     api_hash: str
@@ -56,12 +56,12 @@ class UserAccount:
 
 @dataclass
 class TelegramGroup:
-    """Конфигурация группы Telegram"""
+    """Telegram group configuration"""
     group_id: int
     group_name: str
     invite_link: str
     is_active: bool = True
-    assigned_accounts: List[str] = None  # session_names аккаунтов
+    assigned_accounts: List[str] = None  # session_names of accounts
     max_daily_invites: int = 100
     current_daily_invites: int = 0
     
@@ -70,7 +70,7 @@ class TelegramGroup:
             self.assigned_accounts = []
 
 class ConfigManager:
-    """Менеджер конфигурации"""
+    """Configuration manager"""
     
     def __init__(self, config_dir: str = "config"):
         self.config_dir = config_dir
@@ -79,7 +79,7 @@ class ConfigManager:
         self.bot_config = BotConfig.from_env()
         
     def load_accounts(self) -> List[UserAccount]:
-        """Загрузка пользовательских аккаунтов"""
+        """Load user accounts"""
         if not os.path.exists(self.accounts_file):
             return []
         
@@ -93,7 +93,7 @@ class ConfigManager:
         return accounts
     
     def save_accounts(self, accounts: List[UserAccount]):
-        """Сохранение пользовательских аккаунтов"""
+        """Save user accounts"""
         data = []
         for account in accounts:
             account_dict = {
@@ -112,7 +112,7 @@ class ConfigManager:
             json.dump(data, f, indent=2, ensure_ascii=False)
     
     def load_groups(self) -> List[TelegramGroup]:
-        """Загрузка групп"""
+        """Load groups"""
         if not os.path.exists(self.groups_file):
             return []
         
@@ -126,7 +126,7 @@ class ConfigManager:
         return groups
     
     def save_groups(self, groups: List[TelegramGroup]):
-        """Сохранение групп"""
+        """Save groups"""
         data = []
         for group in groups:
             group_dict = {
@@ -144,13 +144,13 @@ class ConfigManager:
             json.dump(data, f, indent=2, ensure_ascii=False)
     
     def add_account(self, session_name: str, api_id: int, api_hash: str, phone: str):
-        """Добавление нового аккаунта"""
+        """Add new account"""
         accounts = self.load_accounts()
         
-        # Проверяем, что такого аккаунта еще нет
+        # Check that such account doesn't exist yet
         for account in accounts:
             if account.session_name == session_name:
-                raise ValueError(f"Аккаунт с именем сессии '{session_name}' уже существует")
+                raise ValueError(f"Account with session name '{session_name}' already exists")
         
         new_account = UserAccount(
             session_name=session_name,
@@ -165,13 +165,13 @@ class ConfigManager:
         return new_account
     
     def add_group(self, group_id: int, group_name: str, invite_link: str):
-        """Добавление новой группы"""
+        """Add new group"""
         groups = self.load_groups()
         
-        # Проверяем, что такой группы еще нет
+        # Check that such group doesn't exist yet
         for group in groups:
             if group.group_id == group_id:
-                raise ValueError(f"Группа с ID '{group_id}' уже существует")
+                raise ValueError(f"Group with ID '{group_id}' already exists")
         
         new_group = TelegramGroup(
             group_id=group_id,
