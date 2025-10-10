@@ -21,11 +21,14 @@ from src.group_manager import GroupManager
 from src.cooldown_manager import CooldownManager
 
 # Настройка логирования
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[
-        logging.FileHandler('logs/bot.log', encoding='utf-8'),
+        logging.FileHandler(os.path.join(log_dir, 'bot.log'), encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
@@ -35,7 +38,11 @@ class InviteBot:
     """Основной класс бота-приглашающего"""
     
     def __init__(self):
-        self.config_manager = ConfigManager()
+        # Получаем директорию скрипта для правильных путей
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_dir = os.path.join(script_dir, 'config')
+        
+        self.config_manager = ConfigManager(config_dir)
         self.account_manager = AccountManager(self.config_manager)
         self.group_manager = GroupManager(self.config_manager)
         self.cooldown_manager = CooldownManager()
@@ -443,25 +450,55 @@ class InviteBot:
         self.cooldown_manager.cleanup_expired_blocks()
         await query.edit_message_text("✅ Очистка завершена. Истекшие блокировки удалены.")
     
+    def start_bot(self):
+        """Синхронный запуск бота"""
+        logger.info("Запуск бота...")
+        
+        try:
+            # Инициализируем в отдельном event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            try:
+                loop.run_until_complete(self.initialize())
+                
+                # Запускаем polling
+                self.application.run_polling(
+                    allowed_updates=Update.ALL_TYPES,
+                    drop_pending_updates=True
+                )
+            finally:
+                loop.close()
+                
+        except Exception as e:
+            logger.error(f"Ошибка при запуске бота: {e}")
+            raise
+    
     async def run(self):
         """Запуск бота"""
         logger.info("Запуск бота...")
         
         try:
             await self.initialize()
-            await self.application.run_polling(allowed_updates=Update.ALL_TYPES)
+            # Используем run_polling который правильно управляет event loop
+            await self.application.run_polling(
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=True
+            )
+            
         except Exception as e:
             logger.error(f"Ошибка при запуске бота: {e}")
             raise
-        finally:
-            await self.shutdown()
     
     async def shutdown(self):
         """Завершение работы бота"""
         logger.info("Завершение работы бота...")
         
-        if self.account_manager:
-            await self.account_manager.shutdown()
+        try:
+            if self.account_manager:
+                await self.account_manager.shutdown()
+        except Exception as e:
+            logger.error(f"Ошибка при завершении работы: {e}")
         
         logger.info("Бот остановлен")
 
@@ -471,16 +508,20 @@ def main():
     from dotenv import load_dotenv
     load_dotenv()
     
+    # Получаем директорию скрипта
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
     # Создаем необходимые директории
-    os.makedirs("logs", exist_ok=True)
-    os.makedirs("data", exist_ok=True)
-    os.makedirs("data/sessions", exist_ok=True)
+    os.makedirs(os.path.join(script_dir, "logs"), exist_ok=True)
+    os.makedirs(os.path.join(script_dir, "data"), exist_ok=True)
+    os.makedirs(os.path.join(script_dir, "data", "sessions"), exist_ok=True)
     
     # Запускаем бота
     bot = InviteBot()
     
     try:
-        asyncio.run(bot.run())
+        # Используем run_polling которая сама управляет event loop
+        bot.start_bot()
     except KeyboardInterrupt:
         logger.info("Остановка по сигналу пользователя")
     except Exception as e:

@@ -1,8 +1,8 @@
 [
   {
-    "group_id": -1001234567890,
-    "group_name": "Пример группы",
-    "invite_link": "https://t.me/+xxxxxxxxxx",
+    "group_id": -4925997144,
+    "group_name": "TEST GROUP",
+    "invite_link": "https://t.me/+LFBRnzERNM1hMTVi",
     "is_active": true,
     "assigned_accounts": ["account1"],
     "max_daily_invites": 100,

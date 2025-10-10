@@ -21,7 +21,11 @@ class AccountManager:
         self.config_manager = config_manager
         self.clients: Dict[str, Client] = {}
         self.accounts: List[UserAccount] = []
-        self.session_dir = "data/sessions"
+        
+        # Получаем абсолютный путь к директории сессий
+        import os
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.session_dir = os.path.join(script_dir, "data", "sessions")
         
     async def initialize(self):
         """Инициализация менеджера аккаунтов"""
