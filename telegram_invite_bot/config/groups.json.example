@@ -1,0 +1,11 @@
+[
+  {
+    "group_id": -1001234567890,
+    "group_name": "Пример группы",
+    "invite_link": "https://t.me/+xxxxxxxxxx",
+    "is_active": true,
+    "assigned_accounts": ["account1"],
+    "max_daily_invites": 100,
+    "current_daily_invites": 0
+  }
+]
