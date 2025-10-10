@@ -71,7 +71,6 @@ class InviteBot:
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("invite", self.invite_command))
         self.application.add_handler(CommandHandler("status", self.status_command))
-        self.application.add_handler(CommandHandler("stats", self.stats_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         
         # Admin commands
@@ -221,38 +220,6 @@ To get an invitation, use the /invite command
         
         await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
     
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler for /stats command"""
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
-            return
-        
-        # Get statistics
-        cooldown_stats = self.cooldown_manager.get_global_stats()
-        account_stats = self.account_manager.get_account_stats()
-        group_stats = self.group_manager.get_group_stats()
-        
-        stats_text = f"""
-📈 **Bot Statistics**
-
-**Users:**
-👥 Total users: {cooldown_stats['total_users']}
-🚫 Blocked: {cooldown_stats['active_blocks']}
-🎫 Invitations today: {cooldown_stats['total_invites_today']}
-
-**Accounts:**
-👤 Total accounts: {account_stats['total_accounts']}
-✅ Active: {account_stats['active_accounts']}
-📤 Invitations from accounts: {account_stats['total_daily_invites']}
-
-**Groups:**
-🏢 Total groups: {group_stats['total_groups']}
-✅ Active: {group_stats['active_groups']}
-📥 Invitations to groups: {group_stats['total_daily_invites']}
-        """
-        
-        await update.message.reply_text(stats_text, parse_mode=ParseMode.MARKDOWN)
-    
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /help command"""
         help_text = """
@@ -287,8 +254,11 @@ For questions, contact the administrator.
         
         keyboard = [
             [
-                InlineKeyboardButton(" Accounts", callback_data="admin_accounts_0"),
+                InlineKeyboardButton("👥 Accounts", callback_data="admin_accounts_0"),
                 InlineKeyboardButton("🏢 Groups", callback_data="admin_groups_0")
+            ],
+            [
+                InlineKeyboardButton("📊 Statistics", callback_data="admin_statistics")
             ]
         ]
         
@@ -365,6 +335,8 @@ For questions, contact the administrator.
         elif query.data.startswith("admin_groups_"):
             page = int(query.data.split("_")[-1])
             await self._show_groups_page(query, page)
+        elif query.data == "admin_statistics":
+            await self._show_statistics(query)
         elif query.data == "admin_back":
             await self._show_admin_menu(query)
     
@@ -456,6 +428,9 @@ For questions, contact the administrator.
             [
                 InlineKeyboardButton("👥 Accounts", callback_data="admin_accounts_0"),
                 InlineKeyboardButton("🏢 Groups", callback_data="admin_groups_0")
+            ],
+            [
+                InlineKeyboardButton("📊 Statistics", callback_data="admin_statistics")
             ]
         ]
         
@@ -466,6 +441,37 @@ For questions, contact the administrator.
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
+    
+    async def _show_statistics(self, query):
+        """Show bot statistics"""
+        # Get statistics
+        cooldown_stats = self.cooldown_manager.get_global_stats()
+        account_stats = self.account_manager.get_account_stats()
+        group_stats = self.group_manager.get_group_stats()
+        
+        stats_text = f"""📈 **Bot Statistics**
+
+**Users:**
+👥 Total users: {cooldown_stats['total_users']}
+🚫 Blocked: {cooldown_stats['active_blocks']}
+🎫 Invitations today: {cooldown_stats['total_invites_today']}
+
+**Accounts:**
+👤 Total accounts: {account_stats['total_accounts']}
+✅ Active: {account_stats['active_accounts']}
+📤 Invitations from accounts: {account_stats['total_daily_invites']}
+
+**Groups:**
+🏢 Total groups: {group_stats['total_groups']}
+✅ Active: {group_stats['active_groups']}
+📥 Invitations to groups: {group_stats['total_daily_invites']}
+        """
+        
+        # Add back button
+        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_back")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(stats_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
     
     def start_bot(self):
         """Synchronous bot startup"""
