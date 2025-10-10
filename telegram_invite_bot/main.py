@@ -179,9 +179,9 @@ To get an invitation, use the /invite command
             self.group_manager.record_invitation(user_id, target_group.group_id)
             
             await update.message.reply_text(
-                f"✅ **Invitation sent!**\\n\\n"
-                f"Group: {target_group.group_name}\\n"
-                f"Link: {target_group.invite_link}\\n\\n"
+                f"✅ **Invitation sent!**\n\n"
+                f"Group: {target_group.group_name}\n"
+                f"Link: {target_group.invite_link}\n\n"
                 f"Check your private messages to receive the invitation.",
                 parse_mode=ParseMode.MARKDOWN
             )
@@ -287,23 +287,15 @@ For questions, contact the administrator.
         
         keyboard = [
             [
-                InlineKeyboardButton("📊 Statistics", callback_data="admin_stats"),
-                InlineKeyboardButton("👥 Accounts", callback_data="admin_accounts")
-            ],
-            [
-                InlineKeyboardButton("🏢 Groups", callback_data="admin_groups"),
-                InlineKeyboardButton("⏰ Cooldowns", callback_data="admin_cooldowns")
-            ],
-            [
-                InlineKeyboardButton("🔄 Reset Statistics", callback_data="admin_reset"),
-                InlineKeyboardButton("🧹 Cleanup", callback_data="admin_cleanup")
+                InlineKeyboardButton(" Accounts", callback_data="admin_accounts_0"),
+                InlineKeyboardButton("🏢 Groups", callback_data="admin_groups_0")
             ]
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            "🔧 **Admin Panel**\\n\\nSelect an action:",
+            "🔧 **Admin Panel**\n\nSelect section:",
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN
         )
@@ -367,88 +359,113 @@ For questions, contact the administrator.
             await query.edit_message_text("❌ Access denied.")
             return
         
-        if query.data == "admin_stats":
-            await self._show_detailed_stats(query)
-        elif query.data == "admin_accounts":
-            await self._show_account_details(query)
-        elif query.data == "admin_groups":
-            await self._show_group_details(query)
-        elif query.data == "admin_cooldowns":
-            await self._show_cooldown_details(query)
-        elif query.data == "admin_reset":
-            await self._confirm_reset(query)
-        elif query.data == "admin_cleanup":
-            await self._perform_cleanup(query)
+        if query.data.startswith("admin_accounts_"):
+            page = int(query.data.split("_")[-1])
+            await self._show_accounts_page(query, page)
+        elif query.data.startswith("admin_groups_"):
+            page = int(query.data.split("_")[-1])
+            await self._show_groups_page(query, page)
+        elif query.data == "admin_back":
+            await self._show_admin_menu(query)
     
-    async def _show_detailed_stats(self, query):
-        """Show detailed statistics"""
-        recent_activity = self.cooldown_manager.get_recent_activity(24)
-        
-        stats_text = "📊 **Detailed Statistics (24 hours)**\\n\\n"
-        
-        if recent_activity:
-            stats_text += "**Active Users:**\\n"
-            for activity in recent_activity[:10]:  # Show only first 10
-                last_time = datetime.fromtimestamp(activity['last_invite_time'])
-                stats_text += f"• {activity['user_id']}: {activity['invite_count_today']} invitations, last: {last_time.strftime('%H:%M')}\\n"
-        else:
-            stats_text += "No activity."
-        
-        await query.edit_message_text(stats_text, parse_mode=ParseMode.MARKDOWN)
-    
-    async def _show_account_details(self, query):
-        """Show account details"""
+    async def _show_accounts_page(self, query, page=0):
+        """Show accounts with pagination"""
         account_stats = self.account_manager.get_account_stats()
+        accounts = account_stats.get('accounts_details', [])
         
-        details_text = "👤 **Account Status**\\n\\n"
+        # Calculate pagination
+        items_per_page = 15
+        total_items = len(accounts)
+        total_pages = (total_items - 1) // items_per_page + 1 if total_items > 0 else 1
+        start_idx = page * items_per_page
+        end_idx = start_idx + items_per_page
+        page_accounts = accounts[start_idx:end_idx]
         
-        for account in account_stats['accounts_details']:
-            status = "✅" if account['is_active'] else "❌"
-            details_text += f"{status} {account['session_name']}: {account['daily_invites']} invitations\\n"
+        # Build message text
+        text = f"👥 **Accounts** (Page {page + 1}/{total_pages})\n\n"
         
-        await query.edit_message_text(details_text, parse_mode=ParseMode.MARKDOWN)
+        if not page_accounts:
+            text += "No accounts found."
+        else:
+            for account in page_accounts:
+                daily_invites = account.get('daily_invites', 0)
+                text += f"• {account['session_name']} - {daily_invites} invitations\n"
+        
+        # Build pagination keyboard
+        keyboard = []
+        nav_row = []
+        
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_accounts_{page-1}"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("➡️ Next", callback_data=f"admin_accounts_{page+1}"))
+        
+        if nav_row:
+            keyboard.append(nav_row)
+        
+        # Add back button
+        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_back")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
     
-    async def _show_group_details(self, query):
-        """Show group details"""
+    async def _show_groups_page(self, query, page=0):
+        """Show groups with pagination"""
         group_stats = self.group_manager.get_group_stats()
+        groups = group_stats.get('groups_details', [])
         
-        details_text = "🏢 **Group Status**\\n\\n"
+        # Calculate pagination
+        items_per_page = 15
+        total_items = len(groups)
+        total_pages = (total_items - 1) // items_per_page + 1 if total_items > 0 else 1
+        start_idx = page * items_per_page
+        end_idx = start_idx + items_per_page
+        page_groups = groups[start_idx:end_idx]
         
-        for group in group_stats['groups_details']:
-            status = "✅" if group['is_active'] else "❌"
-            details_text += f"{status} {group['group_name']}: {group['daily_invites']}/{group['max_daily_invites']}\\n"
+        # Build message text
+        text = f"🏢 **Groups** (Page {page + 1}/{total_pages})\n\n"
         
-        await query.edit_message_text(details_text, parse_mode=ParseMode.MARKDOWN)
+        if not page_groups:
+            text += "No groups found."
+        else:
+            for group in page_groups:
+                daily_invites = group.get('daily_invites', 0)
+                text += f"• {group['group_name']} - {daily_invites} invitations\n"
+        
+        # Build pagination keyboard
+        keyboard = []
+        nav_row = []
+        
+        if page > 0:
+            nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_groups_{page-1}"))
+        if page < total_pages - 1:
+            nav_row.append(InlineKeyboardButton("➡️ Next", callback_data=f"admin_groups_{page+1}"))
+        
+        if nav_row:
+            keyboard.append(nav_row)
+        
+        # Add back button
+        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_back")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
     
-    async def _show_cooldown_details(self, query):
-        """Show cooldown details"""
-        global_stats = self.cooldown_manager.get_global_stats()
+    async def _show_admin_menu(self, query):
+        """Show main admin menu"""
+        keyboard = [
+            [
+                InlineKeyboardButton("👥 Accounts", callback_data="admin_accounts_0"),
+                InlineKeyboardButton("🏢 Groups", callback_data="admin_groups_0")
+            ]
+        ]
         
-        details_text = f"""
-⏰ **Cooldown Settings**
-
-🕐 Invitation cooldown: {global_stats['invite_cooldown_seconds']}s
-🕑 Group cooldown: {global_stats['group_cooldown_seconds']}s
-🎫 Max invitations per day: {global_stats['max_invites_per_day']}
-
-👥 Total users: {global_stats['total_users']}
-🚫 Blocked: {global_stats['active_blocks']}
-        """
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(details_text, parse_mode=ParseMode.MARKDOWN)
-    
-    async def _confirm_reset(self, query):
-        """Confirm statistics reset"""
-        self.cooldown_manager.reset_daily_stats()
-        self.account_manager.reset_daily_stats()
-        self.group_manager.reset_daily_stats()
-        
-        await query.edit_message_text("✅ All daily statistics have been reset.")
-    
-    async def _perform_cleanup(self, query):
-        """Perform cleanup"""
-        self.cooldown_manager.cleanup_expired_blocks()
-        await query.edit_message_text("✅ Cleanup completed. Expired blocks removed.")
+        await query.edit_message_text(
+            "🔧 **Admin Panel**\n\nSelect section:",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
     
     def start_bot(self):
         """Synchronous bot startup"""
