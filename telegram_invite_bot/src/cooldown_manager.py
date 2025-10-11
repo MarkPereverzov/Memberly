@@ -117,6 +117,45 @@ class CooldownManager:
         
         return True, "OK"
     
+    def can_user_request_invite_simple(self, user_id: int) -> tuple[bool, str]:
+        """Check if user can request an invitation (without daily limits)"""
+        current_time = time.time()
+        today = time.strftime("%Y-%m-%d")
+        
+        # Get or create user record
+        if user_id not in self.user_cooldowns:
+            self.user_cooldowns[user_id] = CooldownRecord(
+                user_id=user_id,
+                last_invite_time=0,
+                invite_count_today=0,
+                last_reset_date=today
+            )
+        
+        record = self.user_cooldowns[user_id]
+        
+        # Check if blocked
+        if record.blocked_until and current_time < record.blocked_until:
+            remaining_time = int(record.blocked_until - current_time)
+            hours = remaining_time // 3600
+            minutes = (remaining_time % 3600) // 60
+            return False, f"You are blocked until {time.strftime('%H:%M %d.%m.%Y', time.localtime(record.blocked_until))} ({hours}h {minutes}m remaining)"
+        
+        # Reset daily counter if new day
+        if record.last_reset_date != today:
+            record.invite_count_today = 0
+            record.last_reset_date = today
+            record.blocked_until = None
+        
+        # Only check cooldown between invitations (no daily limit)
+        time_since_last = current_time - record.last_invite_time
+        if time_since_last < self.invite_cooldown_seconds:
+            remaining_cooldown = int(self.invite_cooldown_seconds - time_since_last)
+            minutes = remaining_cooldown // 60
+            seconds = remaining_cooldown % 60
+            return False, f"Please wait {minutes}m {seconds}s before the next invitation."
+        
+        return True, "OK"
+    
     def can_invite_to_group(self, group_id: int) -> tuple[bool, str]:
         """Check if invitation can be sent to group"""
         current_time = time.time()
@@ -148,6 +187,24 @@ class CooldownManager:
         # Update last invitation time to group
         if success:
             self.group_last_invite[group_id] = current_time
+        
+        self.save_cooldowns()
+    
+    def update_user_last_invite_time(self, user_id: int):
+        """Update user's last invite time (for multi-group invitations)"""
+        current_time = time.time()
+        today = time.strftime("%Y-%m-%d")
+        
+        # Get or create user record
+        if user_id not in self.user_cooldowns:
+            self.user_cooldowns[user_id] = CooldownRecord(
+                user_id=user_id,
+                last_invite_time=current_time,
+                invite_count_today=0,
+                last_reset_date=today
+            )
+        else:
+            self.user_cooldowns[user_id].last_invite_time = current_time
         
         self.save_cooldowns()
     

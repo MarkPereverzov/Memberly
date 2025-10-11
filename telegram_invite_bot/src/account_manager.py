@@ -102,6 +102,10 @@ class AccountManager:
         # Select account with least invitations per day
         return min(available_accounts, key=lambda x: x.daily_invites_count)
     
+    def get_active_accounts(self) -> List[UserAccount]:
+        """Get all active accounts"""
+        return [account for account in self.accounts if account.is_active]
+    
     async def send_invite(self, account: UserAccount, user_id: int, group_link: str) -> bool:
         """Send invitation to user"""
         client = self.clients.get(account.session_name)
@@ -224,3 +228,7 @@ class AccountManager:
         except Exception as e:
             logger.error(f"Connection test {session_name}: FAILED ({e})")
             return False
+    
+    def get_client(self, session_name: str) -> Optional[Client]:
+        """Get Pyrogram client for specific account"""
+        return self.clients.get(session_name)

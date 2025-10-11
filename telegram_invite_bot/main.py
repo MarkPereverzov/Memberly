@@ -144,7 +144,7 @@ To get an invitation, use the /invite command
         )
     
     async def invite_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler for /invite command"""
+        """Handler for /invite command - invites user to ALL groups sequentially"""
         user = update.effective_user
         user_id = user.id
         
@@ -157,82 +157,109 @@ To get an invitation, use the /invite command
             )
             return
         
-        # Check user cooldown
-        can_invite, cooldown_message = self.cooldown_manager.can_user_request_invite(user_id)
+        # Check user cooldown (only time-based, no daily limits)
+        can_invite, cooldown_message = self.cooldown_manager.can_user_request_invite_simple(user_id)
         if not can_invite:
             await update.message.reply_text(f"⏰ {cooldown_message}")
             return
         
-        # Get available groups
-        available_groups = self.group_manager.get_available_groups_for_user(user_id)
-        if not available_groups:
+        # Get all active groups
+        all_groups = self.group_manager.get_active_groups()
+        if not all_groups:
             await update.message.reply_text(
-                "😔 Sorry, there are no available groups for invitation right now. Please try again later."
+                "😔 Sorry, there are no available groups right now."
             )
             return
         
-        # Select the best group
-        target_group = self.group_manager.select_best_group_for_user(user_id)
-        if not target_group:
+        await update.message.reply_text(f"🔄 Starting invitations to {len(all_groups)} groups...")
+        
+        successful_invites = []
+        failed_invites = []
+        
+        # Get all available accounts
+        all_accounts = self.account_manager.get_active_accounts()
+        if not all_accounts:
             await update.message.reply_text(
-                "😔 Could not find a suitable group. Please try again later."
+                "😔 No available accounts to send invitations right now."
             )
             return
         
-        # Check group cooldown
-        can_invite_group, group_message = self.cooldown_manager.can_invite_to_group(target_group.group_id)
-        if not can_invite_group:
-            await update.message.reply_text(f"⏰ {group_message}")
-            return
+        account_index = 0
         
-        # Get available account
-        account = self.account_manager.get_available_account(target_group.group_id)
-        if not account:
-            await update.message.reply_text(
-                "😔 No available accounts to send invitation right now. Please try again later."
-            )
-            return
+        # Process each group
+        for i, group in enumerate(all_groups):
+            # Check group cooldown
+            can_invite_group, group_message = self.cooldown_manager.can_invite_to_group(group.group_id)
+            if not can_invite_group:
+                failed_invites.append(f"{group.group_name}: {group_message}")
+                continue
+            
+            # Get account (rotate through available accounts)
+            account = all_accounts[account_index % len(all_accounts)]
+            account_index += 1
+            
+            # Send invitation
+            try:
+                success = await self.account_manager.send_invite(
+                    account, user_id, group.invite_link
+                )
+                
+                if success:
+                    successful_invites.append(group.group_name)
+                    
+                    # Record successful invitation
+                    self.cooldown_manager.record_invite_attempt(user_id, group.group_id, True)
+                    self.group_manager.record_invitation(user_id, group.group_id)
+                    
+                    # Record in database
+                    self.database_manager.record_invitation(
+                        user_id, group.group_id, group.group_name, True
+                    )
+                    
+                    logger.info(f"Successfully invited user {user_id} to group {group.group_name}")
+                else:
+                    failed_invites.append(f"{group.group_name}: Failed to send invitation")
+                    
+                    # Record failed attempt
+                    self.cooldown_manager.record_invite_attempt(user_id, group.group_id, False)
+                    
+                    # Record in database
+                    self.database_manager.record_invitation(
+                        user_id, group.group_id, group.group_name, False, "Failed to send invitation"
+                    )
+                    
+            except Exception as e:
+                failed_invites.append(f"{group.group_name}: Error - {str(e)}")
+                logger.error(f"Error inviting user {user_id} to group {group.group_name}: {e}")
+            
+            # Small delay between invitations to avoid rate limiting
+            if i < len(all_groups) - 1:  # Don't delay after the last invitation
+                await asyncio.sleep(1)
         
-        # Send invitation
-        await update.message.reply_text("🔄 Sending invitation...")
+        # Update user's last invite time
+        self.cooldown_manager.update_user_last_invite_time(user_id)
         
-        success = await self.account_manager.send_invite(
-            account, user_id, target_group.invite_link
-        )
+        # Prepare result message
+        result_message = "🎉 **Invitation Results**\n\n"
         
-        if success:
-            # Record successful invitation
-            self.cooldown_manager.record_invite_attempt(user_id, target_group.group_id, True)
-            self.group_manager.record_invitation(user_id, target_group.group_id)
-            
-            # Record in database
-            self.database_manager.record_invitation(
-                user_id, target_group.group_id, target_group.group_name, True
-            )
-            
-            await update.message.reply_text(
-                f"✅ **Invitation sent!**\n\n"
-                f"Group: {target_group.group_name}\n"
-                f"Link: {target_group.invite_link}\n\n"
-                f"Check your private messages to receive the invitation.",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            
-            logger.info(f"Invitation successfully sent to user {user_id}")
-        else:
-            # Record failed attempt
-            self.cooldown_manager.record_invite_attempt(user_id, target_group.group_id, False)
-            
-            # Record in database
-            self.database_manager.record_invitation(
-                user_id, target_group.group_id, target_group.group_name, False, "Failed to send invitation"
-            )
-            
-            await update.message.reply_text(
-                "❌ Failed to send invitation. Please try again later."
-            )
-            
-            logger.error(f"Failed to send invitation to user {user_id}")
+        if successful_invites:
+            result_message += f"✅ **Successfully added to {len(successful_invites)} groups:**\n"
+            for group_name in successful_invites:
+                result_message += f"• {group_name}\n"
+            result_message += "\n"
+        
+        if failed_invites:
+            result_message += f"❌ **Failed to add to {len(failed_invites)} groups:**\n"
+            for failure in failed_invites:
+                result_message += f"• {failure}\n"
+            result_message += "\n"
+        
+        if not successful_invites and not failed_invites:
+            result_message += "😔 No invitations were processed.\n"
+        
+        result_message += "📩 Check your private messages for invitation links!"
+        
+        await update.message.reply_text(result_message, parse_mode=ParseMode.MARKDOWN)
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /status command"""
@@ -284,9 +311,9 @@ To get an invitation, use the /invite command
         user_id = update.effective_user.id
         is_admin = self._is_admin(user_id)
         
-        help_text = "🆘 **Help**\n\n"
+        help_text = "🆘 Help\n\n"
         
-        help_text += "**Basic Commands:**\n"
+        help_text += "Basic Commands:\n"
         help_text += "• /start - Welcome message\n"
         help_text += "• /invite - Get an invitation to a group\n"
         help_text += "• /status - Check your status\n"
@@ -294,30 +321,30 @@ To get an invitation, use the /invite command
         help_text += "• /help - This help\n"
         
         if is_admin:
-            help_text += "\n**Admin Commands:**\n"
+            help_text += "\nAdmin Commands:\n"
             help_text += "• /admin - Admin panel\n"
-            help_text += "• /whitelist <user_id> <days> - Add user to whitelist\n"
-            help_text += "• /remove_whitelist <user_id> - Remove from whitelist\n"
-            help_text += "• /add_group <id> <name> <link> - Add group\n"
-            help_text += "• /remove_group <id> - Remove group\n"
+            help_text += "• /whitelist (user_id) (days) - Add user to whitelist\n"
+            help_text += "• /remove_whitelist (user_id) - Remove from whitelist\n"
+            help_text += "• /add_group (id) (name) (link) - Add group\n"
+            help_text += "• /remove_group (id) - Remove group\n"
             help_text += "• /force_stats - Force statistics collection\n"
-            help_text += "• /block <user_id> [hours] - Block user\n"
-            help_text += "• /unblock <user_id> - Unblock user\n"
+            help_text += "• /block (user_id) [hours] - Block user\n"
+            help_text += "• /unblock (user_id) - Unblock user\n"
             help_text += "• /reset - Reset daily statistics\n"
         
-        help_text += "\n**How to get an invitation:**\n"
+        help_text += "\nHow to get an invitation:\n"
         help_text += "1. Use the /invite command\n"
         help_text += "2. Wait for request processing\n"
         help_text += "3. Check your private messages\n"
         
-        help_text += "\n**Limitations:**\n"
+        help_text += "\nLimitations:\n"
         help_text += "• Maximum 10 invitations per day\n"
         help_text += "• 5-minute break between invitations\n"
         help_text += "• Only available to whitelisted users\n"
         
         help_text += "\nFor questions, contact the administrator."
         
-        await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(help_text)
     
     async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /admin command"""

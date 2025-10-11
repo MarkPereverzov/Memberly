@@ -144,9 +144,10 @@ class GroupStatsCollector:
     async def _get_group_member_count(self, account, group_id: int) -> Optional[int]:
         """Get member count for a group using Pyrogram client"""
         try:
-            client = account.client
+            # Get client from account manager
+            client = self.account_manager.get_client(account.session_name)
             if not client:
-                logger.error("Client not available")
+                logger.error(f"Client not available for account {account.session_name}")
                 return None
             
             # Get chat information
