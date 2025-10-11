@@ -51,7 +51,6 @@ class CooldownManager:
                 user_id = int(user_id_str)
                 self.user_cooldowns[user_id] = CooldownRecord(**record_data)
                 
-            logger.info(f"Loaded {len(self.user_cooldowns)} cooldown records")
             
         except Exception as e:
             logger.error(f"Error loading cooldowns: {e}")

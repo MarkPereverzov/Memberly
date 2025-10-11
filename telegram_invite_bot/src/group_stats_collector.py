@@ -38,7 +38,6 @@ class GroupStatsCollector:
         
         self._running = True
         self._collection_task = asyncio.create_task(self._collection_loop())
-        logger.info("Started group statistics collection")
     
     async def stop_collection(self):
         """Stop periodic group statistics collection"""
@@ -53,7 +52,6 @@ class GroupStatsCollector:
             except asyncio.CancelledError:
                 pass
         
-        logger.info("Stopped group statistics collection")
     
     async def _collection_loop(self):
         """Main collection loop"""
@@ -74,10 +72,7 @@ class GroupStatsCollector:
             active_groups = self.group_manager.get_active_groups()
             
             if not active_groups:
-                logger.info("No active groups to collect statistics for")
                 return True
-            
-            logger.info(f"Collecting statistics for {len(active_groups)} groups")
             
             successful_collections = 0
             total_groups = len(active_groups)
@@ -95,7 +90,6 @@ class GroupStatsCollector:
                     logger.error(f"Error collecting stats for group {group.group_name}: {e}")
             
             success_rate = (successful_collections / total_groups) * 100
-            logger.info(f"Collection completed: {successful_collections}/{total_groups} groups ({success_rate:.1f}%)")
             
             return success_rate > 50  # Consider successful if > 50% of groups were processed
             
@@ -165,7 +159,6 @@ class GroupStatsCollector:
     
     async def force_collection(self) -> Dict[str, int]:
         """Force immediate collection of all group statistics"""
-        logger.info("Force collecting group statistics")
         
         active_groups = self.group_manager.get_active_groups()
         results = {
@@ -191,7 +184,6 @@ class GroupStatsCollector:
                 results["failed"] += 1
                 results["errors"].append(f"Error with {group.group_name}: {str(e)}")
         
-        logger.info(f"Force collection completed: {results['successful']}/{results['total_groups']} successful")
         return results
     
     def get_collection_status(self) -> Dict:
@@ -216,8 +208,6 @@ class GroupStatsCollector:
         if retry_delay_seconds is not None:
             self.retry_delay = max(10, retry_delay_seconds)  # Minimum 10 seconds
         
-        logger.info(f"Updated collection settings: interval={self.collection_interval}s, "
-                   f"retries={self.max_retries}, delay={self.retry_delay}s")
     
     async def get_group_stats_history(self, group_id: int, days: int = 30) -> List[Dict]:
         """Get historical statistics for a group (placeholder for future implementation)"""
@@ -237,5 +227,4 @@ class GroupStatsCollector:
         """Clean up old statistics (placeholder for future implementation)"""
         # This would clean up historical statistics data
         # For now, we only keep current stats, so nothing to clean
-        logger.info(f"Stats cleanup requested for data older than {days} days")
         return 0

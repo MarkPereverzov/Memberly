@@ -29,12 +29,26 @@ os.makedirs(log_dir, exist_ok=True)
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
+    level=logging.WARNING,
     handlers=[
         logging.FileHandler(os.path.join(log_dir, 'bot.log'), encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
+
+# Настройка уровней логирования для важных компонентов
+logging.getLogger('src.account_manager').setLevel(logging.INFO)
+logging.getLogger('src.group_manager').setLevel(logging.INFO)
+logging.getLogger('src.cooldown_manager').setLevel(logging.ERROR)
+logging.getLogger('src.database_manager').setLevel(logging.ERROR)
+logging.getLogger('src.group_stats_collector').setLevel(logging.ERROR)
+logging.getLogger('__main__').setLevel(logging.ERROR)
+
+# Отключение логов от внешних библиотек
+logging.getLogger('httpx').setLevel(logging.ERROR)
+logging.getLogger('telegram').setLevel(logging.ERROR)
+logging.getLogger('pyrogram').setLevel(logging.ERROR)
+logging.getLogger('asyncio').setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
 class InviteBot:
@@ -71,7 +85,6 @@ class InviteBot:
         
     async def initialize(self):
         """Bot initialization"""
-        logger.info("Initializing bot...")
         
         # Initialize managers
         await self.account_manager.initialize()
@@ -86,7 +99,6 @@ class InviteBot:
         # Start group statistics collection
         await self.group_stats_collector.start_collection()
         
-        logger.info("Bot initialized successfully")
     
     def _register_handlers(self):
         """Register command handlers"""
@@ -121,7 +133,6 @@ class InviteBot:
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /start command"""
         user = update.effective_user
-        logger.info(f"User {user.id} ({user.username}) started the bot")
         
         welcome_text = f"""
 🤖 **Welcome to the Invite Bot!**
@@ -147,8 +158,6 @@ To get an invitation, use the /invite command
         """Handler for /invite command - invites user to ALL groups sequentially"""
         user = update.effective_user
         user_id = user.id
-        
-        logger.info(f"Invitation request from user {user_id} ({user.username})")
         
         # Check if user is whitelisted
         if not self._is_whitelisted(user_id):
@@ -769,7 +778,6 @@ To get an invitation, use the /invite command
     
     def start_bot(self):
         """Synchronous bot startup"""
-        logger.info("Starting bot...")
         
         try:
             # Initialize in separate event loop
@@ -793,7 +801,6 @@ To get an invitation, use the /invite command
     
     async def run(self):
         """Bot startup"""
-        logger.info("Starting bot...")
         
         try:
             await self.initialize()
@@ -809,7 +816,6 @@ To get an invitation, use the /invite command
     
     async def shutdown(self):
         """Bot shutdown"""
-        logger.info("Shutting down bot...")
         
         try:
             if self.account_manager:
@@ -822,7 +828,6 @@ To get an invitation, use the /invite command
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
         
-        logger.info("Bot stopped")
 
 def main():
     """Main function"""
@@ -845,7 +850,7 @@ def main():
         # Use run_polling which manages event loop itself
         bot.start_bot()
     except KeyboardInterrupt:
-        logger.info("Stopped by user signal")
+        pass
     except Exception as e:
         logger.error(f"Critical error: {e}")
         return 1
