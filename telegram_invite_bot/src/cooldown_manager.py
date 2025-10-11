@@ -1,5 +1,5 @@
 """
-Система кулдаунов и защиты от бана
+Cooldown system and ban protection
 """
 import time
 import logging
@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CooldownRecord:
-    """Запись о кулдауне"""
+    """Cooldown record"""
     user_id: int
     last_invite_time: float
     invite_count_today: int
@@ -20,7 +20,7 @@ class CooldownRecord:
     blocked_until: Optional[float] = None
 
 class CooldownManager:
-    """Менеджер кулдаунов и защиты от спама"""
+    """Cooldown and spam protection manager"""
     
     def __init__(self, data_dir: str = "data"):
         self.data_dir = data_dir
@@ -28,16 +28,16 @@ class CooldownManager:
         self.user_cooldowns: Dict[int, CooldownRecord] = {}
         self.group_last_invite: Dict[int, float] = {}  # group_id -> timestamp
         
-        # Настройки кулдаунов
-        self.invite_cooldown_seconds = 300  # 5 минут между приглашениями
-        self.group_cooldown_seconds = 60    # 1 минута между приглашениями в группы
-        self.max_invites_per_day = 10       # Максимум приглашений в день
-        self.ban_duration_hours = 24        # Длительность бана в часах
+        # Cooldown settings
+        self.invite_cooldown_seconds = 300  # 5 minutes between invitations
+        self.group_cooldown_seconds = 60    # 1 minute between group invitations
+        self.max_invites_per_day = 10       # Maximum invitations per day
+        self.ban_duration_hours = 24        # Ban duration in hours
         
         self.load_cooldowns()
     
     def load_cooldowns(self):
-        """Загрузка данных о кулдаунах"""
+        """Load cooldown data"""
         if not os.path.exists(self.cooldowns_file):
             return
         
@@ -49,13 +49,13 @@ class CooldownManager:
                 user_id = int(user_id_str)
                 self.user_cooldowns[user_id] = CooldownRecord(**record_data)
                 
-            logger.info(f"Загружено {len(self.user_cooldowns)} записей кулдаунов")
+            logger.info(f"Loaded {len(self.user_cooldowns)} cooldown records")
             
         except Exception as e:
-            logger.error(f"Ошибка загрузки кулдаунов: {e}")
+            logger.error(f"Error loading cooldowns: {e}")
     
     def save_cooldowns(self):
-        """Сохранение данных о кулдаунах"""
+        """Save cooldown data"""
         try:
             data = {}
             for user_id, record in self.user_cooldowns.items():
@@ -72,14 +72,14 @@ class CooldownManager:
                 json.dump(data, f, indent=2, ensure_ascii=False)
                 
         except Exception as e:
-            logger.error(f"Ошибка сохранения кулдаунов: {e}")
+            logger.error(f"Error saving cooldowns: {e}")
     
     def can_user_request_invite(self, user_id: int) -> tuple[bool, str]:
-        """Проверка, может ли пользователь запросить приглашение"""
+        """Check if user can request an invitation"""
         current_time = time.time()
         today = time.strftime("%Y-%m-%d")
         
-        # Получаем или создаем запись для пользователя
+        # Get or create user record
         if user_id not in self.user_cooldowns:
             self.user_cooldowns[user_id] = CooldownRecord(
                 user_id=user_id,
@@ -90,50 +90,50 @@ class CooldownManager:
         
         record = self.user_cooldowns[user_id]
         
-        # Проверяем блокировку
+        # Check if blocked
         if record.blocked_until and current_time < record.blocked_until:
             remaining_time = int(record.blocked_until - current_time)
             hours = remaining_time // 3600
             minutes = (remaining_time % 3600) // 60
-            return False, f"Вы заблокированы до {time.strftime('%H:%M %d.%m.%Y', time.localtime(record.blocked_until))} (осталось {hours}ч {minutes}м)"
+            return False, f"You are blocked until {time.strftime('%H:%M %d.%m.%Y', time.localtime(record.blocked_until))} ({hours}h {minutes}m remaining)"
         
-        # Сбрасываем дневной счетчик если новый день
+        # Reset daily counter if new day
         if record.last_reset_date != today:
             record.invite_count_today = 0
             record.last_reset_date = today
             record.blocked_until = None
         
-        # Проверяем дневной лимит
+        # Check daily limit
         if record.invite_count_today >= self.max_invites_per_day:
-            return False, f"Вы достигли дневного лимита приглашений ({self.max_invites_per_day}). Попробуйте завтра."
+            return False, f"You have reached the daily invitation limit ({self.max_invites_per_day}). Try again tomorrow."
         
-        # Проверяем кулдаун между приглашениями
+        # Check cooldown between invitations
         time_since_last = current_time - record.last_invite_time
         if time_since_last < self.invite_cooldown_seconds:
             remaining_cooldown = int(self.invite_cooldown_seconds - time_since_last)
             minutes = remaining_cooldown // 60
             seconds = remaining_cooldown % 60
-            return False, f"Подождите {minutes}м {seconds}с перед следующим приглашением."
+            return False, f"Please wait {minutes}m {seconds}s before the next invitation."
         
         return True, "OK"
     
     def can_invite_to_group(self, group_id: int) -> tuple[bool, str]:
-        """Проверка, можно ли отправить приглашение в группу"""
+        """Check if invitation can be sent to group"""
         current_time = time.time()
         
         if group_id in self.group_last_invite:
             time_since_last = current_time - self.group_last_invite[group_id]
             if time_since_last < self.group_cooldown_seconds:
                 remaining_cooldown = int(self.group_cooldown_seconds - time_since_last)
-                return False, f"Кулдаун группы: подождите {remaining_cooldown}с"
+                return False, f"Group cooldown: wait {remaining_cooldown}s"
         
         return True, "OK"
     
     def record_invite_attempt(self, user_id: int, group_id: int, success: bool):
-        """Запись попытки приглашения"""
+        """Record invitation attempt"""
         current_time = time.time()
         
-        # Обновляем запись пользователя
+        # Update user record
         if user_id in self.user_cooldowns:
             record = self.user_cooldowns[user_id]
             record.last_invite_time = current_time
@@ -141,18 +141,18 @@ class CooldownManager:
             if success:
                 record.invite_count_today += 1
                 
-                # Проверяем, не достиг ли пользователь лимита
+                # Check if user reached the limit
                 if record.invite_count_today >= self.max_invites_per_day:
-                    logger.warning(f"Пользователь {user_id} достиг дневного лимита приглашений")
+                    logger.warning(f"User {user_id} reached daily invitation limit")
         
-        # Обновляем время последнего приглашения в группу
+        # Update last invitation time to group
         if success:
             self.group_last_invite[group_id] = current_time
         
         self.save_cooldowns()
     
     def block_user(self, user_id: int, duration_hours: Optional[int] = None):
-        """Блокировка пользователя"""
+        """Block user"""
         if duration_hours is None:
             duration_hours = self.ban_duration_hours
         
@@ -171,17 +171,17 @@ class CooldownManager:
         self.user_cooldowns[user_id].blocked_until = block_until
         self.save_cooldowns()
         
-        logger.warning(f"Пользователь {user_id} заблокирован на {duration_hours} часов")
+        logger.warning(f"User {user_id} blocked for {duration_hours} hours")
     
     def unblock_user(self, user_id: int):
-        """Разблокировка пользователя"""
+        """Unblock user"""
         if user_id in self.user_cooldowns:
             self.user_cooldowns[user_id].blocked_until = None
             self.save_cooldowns()
-            logger.info(f"Пользователь {user_id} разблокирован")
+            logger.info(f"User {user_id} unblocked")
     
     def get_user_stats(self, user_id: int) -> Dict:
-        """Получение статистики пользователя"""
+        """Get user statistics"""
         if user_id not in self.user_cooldowns:
             return {
                 "invite_count_today": 0,
@@ -207,19 +207,19 @@ class CooldownManager:
         }
     
     def reset_daily_stats(self):
-        """Сброс дневной статистики"""
+        """Reset daily statistics"""
         today = time.strftime("%Y-%m-%d")
         
         for record in self.user_cooldowns.values():
             record.invite_count_today = 0
             record.last_reset_date = today
-            # Не сбрасываем блокировки - они должны истечь сами
+            # Don't reset blocks - they should expire naturally
         
         self.save_cooldowns()
-        logger.info("Дневная статистика кулдаунов сброшена")
+        logger.info("Daily cooldown statistics reset")
     
     def cleanup_expired_blocks(self):
-        """Очистка истекших блокировок"""
+        """Clean up expired blocks"""
         current_time = time.time()
         cleaned_count = 0
         
@@ -230,10 +230,10 @@ class CooldownManager:
         
         if cleaned_count > 0:
             self.save_cooldowns()
-            logger.info(f"Очищено {cleaned_count} истекших блокировок")
+            logger.info(f"Cleaned up {cleaned_count} expired blocks")
     
     def get_global_stats(self) -> Dict:
-        """Получение глобальной статистики"""
+        """Get global statistics"""
         current_time = time.time()
         
         total_users = len(self.user_cooldowns)
@@ -253,7 +253,7 @@ class CooldownManager:
     def update_settings(self, invite_cooldown: Optional[int] = None, 
                        group_cooldown: Optional[int] = None,
                        max_invites: Optional[int] = None):
-        """Обновление настроек кулдаунов"""
+        """Update cooldown settings"""
         if invite_cooldown is not None:
             self.invite_cooldown_seconds = invite_cooldown
         
@@ -263,10 +263,10 @@ class CooldownManager:
         if max_invites is not None:
             self.max_invites_per_day = max_invites
         
-        logger.info("Настройки кулдаунов обновлены")
+        logger.info("Cooldown settings updated")
     
     def get_recent_activity(self, hours: int = 24) -> List[Dict]:
-        """Получение недавней активности"""
+        """Get recent activity"""
         current_time = time.time()
         cutoff_time = current_time - (hours * 3600)
         
@@ -280,7 +280,7 @@ class CooldownManager:
                     "is_blocked": record.blocked_until and current_time < record.blocked_until
                 })
         
-        # Сортируем по времени последнего приглашения
+        # Sort by last invitation time
         recent_activity.sort(key=lambda x: x["last_invite_time"], reverse=True)
         
         return recent_activity

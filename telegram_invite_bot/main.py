@@ -19,6 +19,9 @@ from config.config import ConfigManager, BotConfig
 from src.account_manager import AccountManager
 from src.group_manager import GroupManager
 from src.cooldown_manager import CooldownManager
+from src.database_manager import DatabaseManager
+from src.whitelist_manager import WhitelistManager
+from src.group_stats_collector import GroupStatsCollector
 
 # Setup logging
 log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
@@ -41,11 +44,27 @@ class InviteBot:
         # Get script directory for correct paths
         script_dir = os.path.dirname(os.path.abspath(__file__))
         config_dir = os.path.join(script_dir, 'config')
+        data_dir = os.path.join(script_dir, '..', 'data')
         
         self.config_manager = ConfigManager(config_dir)
         self.account_manager = AccountManager(self.config_manager)
         self.group_manager = GroupManager(self.config_manager)
         self.cooldown_manager = CooldownManager()
+        
+        # Initialize database and whitelist managers
+        db_path = os.path.join(data_dir, "bot_database.db")
+        self.database_manager = DatabaseManager(db_path)
+        self.whitelist_manager = WhitelistManager(
+            self.database_manager, 
+            self.config_manager.bot_config.admin_user_ids
+        )
+        
+        # Initialize group statistics collector
+        self.group_stats_collector = GroupStatsCollector(
+            self.database_manager,
+            self.group_manager,
+            self.account_manager
+        )
         
         self.bot_config = self.config_manager.bot_config
         self.application = None
@@ -64,6 +83,9 @@ class InviteBot:
         # Register handlers
         self._register_handlers()
         
+        # Start group statistics collection
+        await self.group_stats_collector.start_collection()
+        
         logger.info("Bot initialized successfully")
     
     def _register_handlers(self):
@@ -75,6 +97,12 @@ class InviteBot:
         
         # Admin commands
         self.application.add_handler(CommandHandler("admin", self.admin_command))
+        self.application.add_handler(CommandHandler("whitelist", self.whitelist_command))
+        self.application.add_handler(CommandHandler("remove_whitelist", self.remove_whitelist_command))
+        self.application.add_handler(CommandHandler("add_group", self.add_group_command))
+        self.application.add_handler(CommandHandler("remove_group", self.remove_group_command))
+        self.application.add_handler(CommandHandler("groups_info", self.groups_info_command))
+        self.application.add_handler(CommandHandler("force_stats", self.force_stats_command))
         self.application.add_handler(CommandHandler("block", self.block_user_command))
         self.application.add_handler(CommandHandler("unblock", self.unblock_user_command))
         self.application.add_handler(CommandHandler("reset", self.reset_stats_command))
@@ -84,11 +112,11 @@ class InviteBot:
     
     def _is_admin(self, user_id: int) -> bool:
         """Check if user is an administrator"""
-        return user_id in self.bot_config.admin_user_ids
+        return self.whitelist_manager.is_admin(user_id)
     
     def _is_whitelisted(self, user_id: int) -> bool:
         """Check if user is whitelisted"""
-        return user_id in self.bot_config.whitelist_user_ids or self._is_admin(user_id)
+        return self.whitelist_manager.is_user_whitelisted(user_id)
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /start command"""
@@ -177,6 +205,11 @@ To get an invitation, use the /invite command
             self.cooldown_manager.record_invite_attempt(user_id, target_group.group_id, True)
             self.group_manager.record_invitation(user_id, target_group.group_id)
             
+            # Record in database
+            self.database_manager.record_invitation(
+                user_id, target_group.group_id, target_group.group_name, True
+            )
+            
             await update.message.reply_text(
                 f"✅ **Invitation sent!**\n\n"
                 f"Group: {target_group.group_name}\n"
@@ -190,6 +223,11 @@ To get an invitation, use the /invite command
             # Record failed attempt
             self.cooldown_manager.record_invite_attempt(user_id, target_group.group_id, False)
             
+            # Record in database
+            self.database_manager.record_invitation(
+                user_id, target_group.group_id, target_group.group_name, False, "Failed to send invitation"
+            )
+            
             await update.message.reply_text(
                 "❌ Failed to send invitation. Please try again later."
             )
@@ -200,49 +238,84 @@ To get an invitation, use the /invite command
         """Handler for /status command"""
         user_id = update.effective_user.id
         
-        if not self._is_whitelisted(user_id):
-            await update.message.reply_text("❌ You don't have access to this bot.")
+        # Get access information
+        can_access, reason = self.whitelist_manager.can_user_access(user_id)
+        if not can_access:
+            await update.message.reply_text(f"❌ {reason}")
             return
         
         # Get user statistics
         user_stats = self.cooldown_manager.get_user_stats(user_id)
+        access_info = self.whitelist_manager.get_user_access_info(user_id)
         
-        status_text = f"""
-📊 **Your Status**
-
-🎫 Invitations today: {user_stats['invite_count_today']}/{self.cooldown_manager.max_invites_per_day}
-🎯 Remaining invitations: {user_stats['remaining_invites']}
-
-{"🚫 Blocked" if user_stats['is_blocked'] else "✅ Active"}
-
-{"⏰ Can request invitation" if user_stats['can_invite'] else "⏳ Waiting for cooldown"}
-        """
+        status_text = f"📊 **Your Status**\n\n"
+        
+        # Access level
+        if access_info['is_admin']:
+            status_text += "👑 **Administrator**\n"
+        elif access_info['is_whitelisted']:
+            status_text += f"✅ **Whitelisted** ({access_info['days_remaining']} days remaining)\n"
+        else:
+            status_text += "❌ **Not whitelisted**\n"
+        
+        # Invitation statistics
+        status_text += f"\n🎫 **Invitations:**\n"
+        status_text += f"• Today: {user_stats['invite_count_today']}/{self.cooldown_manager.max_invites_per_day}\n"
+        status_text += f"• Remaining: {user_stats['remaining_invites']}\n"
+        
+        # Block status
+        if user_stats['is_blocked']:
+            block_until = datetime.fromtimestamp(user_stats['blocked_until'])
+            status_text += f"\n🚫 **Blocked until:** {block_until.strftime('%H:%M %d.%m.%Y')}\n"
+        else:
+            status_text += f"\n✅ **Status:** Active\n"
+        
+        # Cooldown status
+        can_invite, cooldown_msg = self.cooldown_manager.can_user_request_invite(user_id)
+        if can_invite:
+            status_text += "⏰ **Next invitation:** Available now\n"
+        else:
+            status_text += f"⏰ **Next invitation:** {cooldown_msg}\n"
         
         await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /help command"""
-        help_text = """
-🆘 **Help**
-
-**Basic Commands:**
-• /start - Welcome message
-• /invite - Get an invitation to a group
-• /status - Check your status
-• /help - This help
-
-**How to get an invitation:**
-1. Use the /invite command
-2. Wait for request processing
-3. Check your private messages
-
-**Limitations:**
-• Maximum 10 invitations per day
-• 5-minute break between invitations
-• Only available to whitelisted users
-
-For questions, contact the administrator.
-        """
+        user_id = update.effective_user.id
+        is_admin = self._is_admin(user_id)
+        
+        help_text = "🆘 **Help**\n\n"
+        
+        help_text += "**Basic Commands:**\n"
+        help_text += "• /start - Welcome message\n"
+        help_text += "• /invite - Get an invitation to a group\n"
+        help_text += "• /status - Check your status\n"
+        help_text += "• /groups_info - View groups information\n"
+        help_text += "• /help - This help\n"
+        
+        if is_admin:
+            help_text += "\n**Admin Commands:**\n"
+            help_text += "• /admin - Admin panel\n"
+            help_text += "• /whitelist <user_id> <days> - Add user to whitelist\n"
+            help_text += "• /remove_whitelist <user_id> - Remove from whitelist\n"
+            help_text += "• /add_group <id> <name> <link> - Add group\n"
+            help_text += "• /remove_group <id> - Remove group\n"
+            help_text += "• /force_stats - Force statistics collection\n"
+            help_text += "• /block <user_id> [hours] - Block user\n"
+            help_text += "• /unblock <user_id> - Unblock user\n"
+            help_text += "• /reset - Reset daily statistics\n"
+        
+        help_text += "\n**How to get an invitation:**\n"
+        help_text += "1. Use the /invite command\n"
+        help_text += "2. Wait for request processing\n"
+        help_text += "3. Check your private messages\n"
+        
+        help_text += "\n**Limitations:**\n"
+        help_text += "• Maximum 10 invitations per day\n"
+        help_text += "• 5-minute break between invitations\n"
+        help_text += "• Only available to whitelisted users\n"
+        
+        help_text += "\nFor questions, contact the administrator."
         
         await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
     
@@ -319,6 +392,194 @@ For questions, contact the administrator.
         self.group_manager.reset_daily_stats()
         
         await update.message.reply_text("✅ Daily statistics reset.")
+    
+    async def whitelist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /whitelist command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "Usage: /whitelist <user_id> <days> [username]\n"
+                "Example: /whitelist 123456789 30 @username"
+            )
+            return
+        
+        try:
+            user_id = int(context.args[0])
+            days = int(context.args[1])
+            username = context.args[2] if len(context.args) > 2 else None
+            
+            if days <= 0:
+                await update.message.reply_text("❌ Days must be a positive number.")
+                return
+            
+            success = self.whitelist_manager.add_to_whitelist(
+                user_id, days, update.effective_user.id, username
+            )
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ User {user_id} added to whitelist for {days} days."
+                )
+                
+                # Record in database
+                self.database_manager.record_invitation(
+                    user_id, 0, "Whitelist Addition", True, f"Added by admin for {days} days"
+                )
+            else:
+                await update.message.reply_text("❌ Failed to add user to whitelist.")
+                
+        except ValueError:
+            await update.message.reply_text("❌ Invalid format. User ID and days must be numbers.")
+    
+    async def remove_whitelist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /remove_whitelist command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text("Usage: /remove_whitelist <user_id>")
+            return
+        
+        try:
+            user_id = int(context.args[0])
+            
+            success = self.whitelist_manager.remove_from_whitelist(user_id)
+            
+            if success:
+                await update.message.reply_text(f"✅ User {user_id} removed from whitelist.")
+            else:
+                await update.message.reply_text(f"❌ User {user_id} not found in whitelist.")
+                
+        except ValueError:
+            await update.message.reply_text("❌ Invalid user ID.")
+    
+    async def add_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /add_group command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        if len(context.args) < 3:
+            await update.message.reply_text(
+                "Usage: /add_group <group_id> <group_name> <invite_link> [max_daily_invites]\n"
+                "Example: /add_group -1001234567890 \"Test Group\" https://t.me/+abc123 100"
+            )
+            return
+        
+        try:
+            group_id = int(context.args[0])
+            group_name = context.args[1]
+            invite_link = context.args[2]
+            max_daily_invites = int(context.args[3]) if len(context.args) > 3 else 100
+            
+            if not invite_link.startswith('https://t.me/'):
+                await update.message.reply_text("❌ Invalid invite link. Must start with https://t.me/")
+                return
+            
+            success = self.group_manager.add_group(group_id, group_name, invite_link, max_daily_invites)
+            
+            if success:
+                await update.message.reply_text(f"✅ Group '{group_name}' added successfully.")
+            else:
+                await update.message.reply_text("❌ Failed to add group. Group may already exist.")
+                
+        except ValueError:
+            await update.message.reply_text("❌ Invalid format. Group ID and max invites must be numbers.")
+    
+    async def remove_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /remove_group command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text("Usage: /remove_group <group_id>")
+            return
+        
+        try:
+            group_id = int(context.args[0])
+            
+            success = self.group_manager.remove_group(group_id)
+            
+            if success:
+                await update.message.reply_text(f"✅ Group with ID {group_id} removed successfully.")
+            else:
+                await update.message.reply_text(f"❌ Group with ID {group_id} not found.")
+                
+        except ValueError:
+            await update.message.reply_text("❌ Invalid group ID.")
+    
+    async def groups_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /groups_info command"""
+        user_id = update.effective_user.id
+        
+        # Check access
+        can_access, reason = self.whitelist_manager.can_user_access(user_id)
+        if not can_access:
+            await update.message.reply_text(f"❌ {reason}")
+            return
+        
+        # Get group statistics
+        group_stats = self.group_manager.get_group_stats()
+        db_stats = self.database_manager.get_overall_statistics()
+        
+        text = "🏢 **Groups Information**\n\n"
+        text += f"📊 **Overall Statistics:**\n"
+        text += f"• Total groups: {group_stats['total_groups']}\n"
+        text += f"• Active groups: {group_stats['active_groups']}\n"
+        text += f"• Daily invitations: {group_stats['total_daily_invites']}\n"
+        
+        if db_stats:
+            text += f"• Average members: {int(db_stats.get('average_member_count', 0))}\n"
+            largest = db_stats.get('largest_group', {})
+            if largest.get('name') != 'N/A':
+                text += f"• Largest group: {largest['name']} ({largest['member_count']} members)\n"
+        
+        text += f"\n📋 **Group Details:**\n"
+        
+        for group in group_stats['groups_details'][:10]:  # Show first 10 groups
+            status = "✅" if group['is_active'] else "❌"
+            text += f"{status} {group['group_name']}\n"
+            text += f"   📈 {group['daily_invites']}/{group['max_daily_invites']} invitations today\n"
+        
+        if len(group_stats['groups_details']) > 10:
+            text += f"\n... and {len(group_stats['groups_details']) - 10} more groups"
+        
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    
+    async def force_stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /force_stats command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        await update.message.reply_text("🔄 Collecting group statistics...")
+        
+        try:
+            results = await self.group_stats_collector.force_collection()
+            
+            text = f"📊 **Statistics Collection Results**\n\n"
+            text += f"📋 Total groups: {results['total_groups']}\n"
+            text += f"✅ Successful: {results['successful']}\n"
+            text += f"❌ Failed: {results['failed']}\n"
+            
+            if results['errors']:
+                text += f"\n⚠️ **Errors:**\n"
+                for error in results['errors'][:5]:  # Show first 5 errors
+                    text += f"• {error}\n"
+                
+                if len(results['errors']) > 5:
+                    text += f"... and {len(results['errors']) - 5} more errors"
+            
+            await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error during statistics collection: {str(e)}")
+            logger.error(f"Error in force_stats_command: {e}")
     
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Button click handler"""
@@ -448,24 +709,36 @@ For questions, contact the administrator.
         cooldown_stats = self.cooldown_manager.get_global_stats()
         account_stats = self.account_manager.get_account_stats()
         group_stats = self.group_manager.get_group_stats()
+        db_stats = self.database_manager.get_overall_statistics()
+        whitelist_stats = self.whitelist_manager.get_whitelist_stats()
         
-        stats_text = f"""📈 **Bot Statistics**
-
-**Users:**
-👥 Total users: {cooldown_stats['total_users']}
-🚫 Blocked: {cooldown_stats['active_blocks']}
-🎫 Invitations today: {cooldown_stats['total_invites_today']}
-
-**Accounts:**
-👤 Total accounts: {account_stats['total_accounts']}
-✅ Active: {account_stats['active_accounts']}
-📤 Invitations from accounts: {account_stats['total_daily_invites']}
-
-**Groups:**
-🏢 Total groups: {group_stats['total_groups']}
-✅ Active: {group_stats['active_groups']}
-📥 Invitations to groups: {group_stats['total_daily_invites']}
-        """
+        stats_text = f"📈 **Bot Statistics**\n\n"
+        
+        stats_text += f"**Users:**\n"
+        stats_text += f"👥 Total users: {cooldown_stats['total_users']}\n"
+        stats_text += f"✅ Active whitelisted: {whitelist_stats['active_users']}\n"
+        stats_text += f"� Administrators: {whitelist_stats['total_admins']}\n"
+        stats_text += f"�🚫 Blocked: {cooldown_stats['active_blocks']}\n"
+        
+        stats_text += f"\n**Invitations (Last 30 days):**\n"
+        stats_text += f"📤 Total: {db_stats.get('total_invitations_30d', 0)}\n"
+        stats_text += f"✅ Successful: {db_stats.get('successful_invitations_30d', 0)}\n"
+        stats_text += f"📊 Success rate: {db_stats.get('success_rate_30d', 0)}%\n"
+        stats_text += f"🎫 Today: {cooldown_stats['total_invites_today']}\n"
+        
+        stats_text += f"\n**Accounts:**\n"
+        stats_text += f"👤 Total: {account_stats['total_accounts']}\n"
+        stats_text += f"✅ Active: {account_stats['active_accounts']}\n"
+        stats_text += f"📤 Daily invites: {account_stats['total_daily_invites']}\n"
+        
+        stats_text += f"\n**Groups:**\n"
+        stats_text += f"🏢 Total: {group_stats['total_groups']}\n"
+        stats_text += f"✅ Active: {group_stats['active_groups']}\n"
+        stats_text += f"� Avg members: {int(db_stats.get('average_member_count', 0))}\n"
+        
+        largest_group = db_stats.get('largest_group', {})
+        if largest_group.get('name') != 'N/A':
+            stats_text += f"🏆 Largest: {largest_group['name']} ({largest_group['member_count']} members)\n"
         
         # Add back button
         keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_back")]]
@@ -520,6 +793,11 @@ For questions, contact the administrator.
         try:
             if self.account_manager:
                 await self.account_manager.shutdown()
+            
+            # Stop group statistics collection
+            if self.group_stats_collector:
+                await self.group_stats_collector.stop_collection()
+                
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
         
