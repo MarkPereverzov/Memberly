@@ -16,6 +16,7 @@ class CooldownRecord:
     user_id: int
     last_invite_time: float
     blocked_until: Optional[float] = None
+    last_reset_date: Optional[str] = None
 
 class CooldownManager:
     """Cooldown and spam protection manager"""
@@ -49,6 +50,9 @@ class CooldownManager:
             
             for user_id_str, record_data in data.items():
                 user_id = int(user_id_str)
+                # Ensure backward compatibility - add missing fields with defaults
+                if 'last_reset_date' not in record_data:
+                    record_data['last_reset_date'] = None
                 self.user_cooldowns[user_id] = CooldownRecord(**record_data)
                 
             
@@ -199,9 +203,9 @@ class CooldownManager:
         
         current_time = time.time()
         block_until = current_time + (duration_hours * 3600)
+        today = time.strftime("%Y-%m-%d")
         
         if user_id not in self.user_cooldowns:
-            today = time.strftime("%Y-%m-%d")
             self.user_cooldowns[user_id] = CooldownRecord(
                 user_id=user_id,
                 last_invite_time=current_time,

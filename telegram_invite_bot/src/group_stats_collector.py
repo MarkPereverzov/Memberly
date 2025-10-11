@@ -99,11 +99,6 @@ class GroupStatsCollector:
     
     async def collect_group_stats(self, group_id: int, group_name: str) -> bool:
         """Collect statistics for a specific group"""
-        # Skip collection for test/invalid group IDs
-        if abs(group_id) < 1000000000:  # Real group IDs are usually > 1 billion
-            logger.debug(f"Skipping stats collection for test group {group_name} (ID: {group_id})")
-            return True  # Return True to avoid retry loops
-            
         for attempt in range(self.max_retries):
             try:
                 # Get available account for the group
@@ -149,11 +144,6 @@ class GroupStatsCollector:
                 logger.error(f"Client not available for account {account.session_name}")
                 return None
             
-            # Skip collection for test/invalid group IDs
-            if abs(group_id) < 1000000000:  # Real group IDs are usually > 1 billion
-                logger.debug(f"Skipping stats collection for test group ID {group_id}")
-                return None
-            
             # Try to get chat information using different methods
             try:
                 # First try: direct chat get
@@ -161,7 +151,7 @@ class GroupStatsCollector:
                 if chat and hasattr(chat, 'members_count'):
                     return chat.members_count
             except Exception as e:
-                logger.debug(f"Direct chat access failed: {e}")
+                logger.debug(f"Direct chat access failed for {group_id}: {e}")
                 
                 # If direct access fails, try to join via invite link if available
                 group = self.group_manager.get_group_by_id(group_id)

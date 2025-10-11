@@ -220,3 +220,114 @@ class AccountManager:
     def get_client(self, session_name: str) -> Optional[Client]:
         """Get Pyrogram client for specific account"""
         return self.clients.get(session_name)
+    
+    async def join_group_with_accounts(self, group_invite_link: str, group_name: str = "Unknown") -> Dict[str, List[str]]:
+        """Join a group with all available accounts
+        
+        Args:
+            group_invite_link: Telegram invite link (https://t.me/+hash or https://t.me/username)
+            group_name: Group name for logging
+            
+        Returns:
+            Dict with 'success' and 'failed' lists containing account session names
+        """
+        results = {
+            "success": [],
+            "failed": []
+        }
+        
+        # Extract invite hash or username from link
+        invite_hash = None
+        username = None
+        
+        if "t.me/+" in group_invite_link:
+            invite_hash = group_invite_link.split("t.me/+")[-1]
+        elif "t.me/" in group_invite_link:
+            username = group_invite_link.split("t.me/")[-1]
+            if username.startswith("@"):
+                username = username[1:]
+        else:
+            logger.error(f"Invalid invite link format: {group_invite_link}")
+            return results
+        
+        for account in self.accounts:
+            if not account.is_active:
+                continue
+                
+            client = self.clients.get(account.session_name)
+            if not client:
+                logger.warning(f"Client not available for account {account.session_name}")
+                results["failed"].append(account.session_name)
+                continue
+            
+            try:
+                if invite_hash:
+                    # Join using invite hash
+                    chat = await client.join_chat(f"https://t.me/+{invite_hash}")
+                    logger.info(f"Account {account.session_name} successfully joined {group_name} via invite hash")
+                elif username:
+                    # Join using username
+                    chat = await client.join_chat(username)
+                    logger.info(f"Account {account.session_name} successfully joined {group_name} via username")
+                else:
+                    logger.error(f"No valid invite method for {account.session_name}")
+                    results["failed"].append(account.session_name)
+                    continue
+                
+                results["success"].append(account.session_name)
+                
+                # Add delay between joins to avoid rate limiting
+                await asyncio.sleep(random.uniform(2, 5))
+                
+            except FloodWait as e:
+                logger.warning(f"FloodWait for account {account.session_name}: {e.value} seconds")
+                results["failed"].append(account.session_name)
+                # Could implement retry logic here
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "already" in error_msg or "participant" in error_msg:
+                    logger.info(f"Account {account.session_name} already in group {group_name}")
+                    results["success"].append(account.session_name)
+                else:
+                    logger.error(f"Failed to join {group_name} with account {account.session_name}: {e}")
+                    results["failed"].append(account.session_name)
+        
+        logger.info(f"Group join results for {group_name}: {len(results['success'])} success, {len(results['failed'])} failed")
+        return results
+    
+    async def auto_join_all_groups(self, groups: List) -> Dict[str, Dict]:
+        """Automatically join all accounts to all active groups
+        
+        Args:
+            groups: List of TelegramGroup objects
+            
+        Returns:
+            Dict with results for each group
+        """
+        all_results = {}
+        
+        for group in groups:
+            if not group.is_active:
+                continue
+                
+            logger.info(f"Starting auto-join for group: {group.group_name}")
+            
+            try:
+                results = await self.join_group_with_accounts(
+                    group.invite_link, 
+                    group.group_name
+                )
+                all_results[group.group_name] = results
+                
+                # Delay between different groups
+                await asyncio.sleep(random.uniform(5, 10))
+                
+            except Exception as e:
+                logger.error(f"Error in auto-join for group {group.group_name}: {e}")
+                all_results[group.group_name] = {
+                    "success": [],
+                    "failed": [acc.session_name for acc in self.accounts if acc.is_active]
+                }
+        
+        return all_results

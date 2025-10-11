@@ -115,6 +115,7 @@ class InviteBot:
         self.application.add_handler(CommandHandler("remove_group", self.remove_group_command))
         self.application.add_handler(CommandHandler("groups_info", self.groups_info_command))
         self.application.add_handler(CommandHandler("force_stats", self.force_stats_command))
+        self.application.add_handler(CommandHandler("join_groups", self.join_groups_command))
         self.application.add_handler(CommandHandler("block", self.block_user_command))
         self.application.add_handler(CommandHandler("unblock", self.unblock_user_command))
         self.application.add_handler(CommandHandler("reset", self.reset_stats_command))
@@ -338,6 +339,7 @@ To get an invitation, use the /invite command
             help_text += "• /block (user_id) [hours] - Block user\n"
             help_text += "• /unblock (user_id) - Unblock user\n"
             help_text += "• /reset - Reset daily statistics\n"
+            help_text += "• /join_groups - Auto-join all accounts to groups\n"
         
         help_text += "\nHow to get an invitation:\n"
         help_text += "1. Use the /invite command\n"
@@ -345,8 +347,6 @@ To get an invitation, use the /invite command
         help_text += "3. Check your private messages\n"
         
         help_text += "\nLimitations:\n"
-        help_text += "• Maximum 10 invitations per day\n"
-        help_text += "• 5-minute break between invitations\n"
         help_text += "• Only available to whitelisted users\n"
         
         help_text += "\nFor questions, contact the administrator."
@@ -426,6 +426,64 @@ To get an invitation, use the /invite command
         self.group_manager.reset_daily_stats()
         
         await update.message.reply_text("✅ Daily statistics reset.")
+    
+    async def join_groups_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /join_groups command - automatically join all accounts to all groups"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        await update.message.reply_text("🔄 Starting automatic group joining process...")
+        
+        try:
+            # Get all active groups
+            active_groups = self.group_manager.get_active_groups()
+            
+            if not active_groups:
+                await update.message.reply_text("❌ No active groups found.")
+                return
+            
+            # Start auto-join process
+            results = await self.account_manager.auto_join_all_groups(active_groups)
+            
+            # Format results message
+            response_lines = ["✅ Auto-join process completed!\n"]
+            
+            total_success = 0
+            total_failed = 0
+            
+            for group_name, group_results in results.items():
+                success_count = len(group_results["success"])
+                failed_count = len(group_results["failed"])
+                
+                total_success += success_count
+                total_failed += failed_count
+                
+                response_lines.append(f"📋 {group_name}")
+                response_lines.append(f"  ✅ Joined: {success_count}")
+                response_lines.append(f"  ❌ Failed: {failed_count}")
+                
+                if group_results["failed"]:
+                    response_lines.append(f"  Failed accounts: {', '.join(group_results['failed'][:3])}")
+                    if len(group_results["failed"]) > 3:
+                        response_lines.append(f"  ...and {len(group_results['failed']) - 3} more")
+                
+                response_lines.append("")
+            
+            response_lines.append(f"📊 Total Summary:")
+            response_lines.append(f"✅ Total Successful: {total_success}")
+            response_lines.append(f"❌ Total Failed: {total_failed}")
+            
+            response_text = "\n".join(response_lines)
+            
+            # Split message if too long
+            if len(response_text) > 4000:
+                response_text = response_text[:4000] + "...\n\n📊 Check logs for full details."
+            
+            await update.message.reply_text(response_text)
+            
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error during auto-join process: {str(e)}")
     
     async def whitelist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /whitelist command"""
