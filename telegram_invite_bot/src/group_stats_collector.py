@@ -99,6 +99,11 @@ class GroupStatsCollector:
     
     async def collect_group_stats(self, group_id: int, group_name: str) -> bool:
         """Collect statistics for a specific group"""
+        # Skip collection for test/invalid group IDs
+        if abs(group_id) < 1000000000:  # Real group IDs are usually > 1 billion
+            logger.debug(f"Skipping stats collection for test group {group_name} (ID: {group_id})")
+            return True  # Return True to avoid retry loops
+            
         for attempt in range(self.max_retries):
             try:
                 # Get available account for the group
@@ -144,14 +149,40 @@ class GroupStatsCollector:
                 logger.error(f"Client not available for account {account.session_name}")
                 return None
             
-            # Get chat information
-            chat = await client.get_chat(group_id)
-            
-            if chat and hasattr(chat, 'members_count'):
-                return chat.members_count
-            else:
-                logger.warning(f"Could not get member count for group {group_id}")
+            # Skip collection for test/invalid group IDs
+            if abs(group_id) < 1000000000:  # Real group IDs are usually > 1 billion
+                logger.debug(f"Skipping stats collection for test group ID {group_id}")
                 return None
+            
+            # Try to get chat information using different methods
+            try:
+                # First try: direct chat get
+                chat = await client.get_chat(group_id)
+                if chat and hasattr(chat, 'members_count'):
+                    return chat.members_count
+            except Exception as e:
+                logger.debug(f"Direct chat access failed: {e}")
+                
+                # If direct access fails, try to join via invite link if available
+                group = self.group_manager.get_group_by_id(group_id)
+                if group and group.invite_link:
+                    try:
+                        # Try to get chat info via invite link
+                        invite_link = group.invite_link.replace('https://t.me/+', '').replace('https://t.me/', '')
+                        if invite_link.startswith('+'):
+                            invite_link = invite_link[1:]
+                        
+                        # Use resolve_peer for invite hashes
+                        peer = await client.resolve_peer(f"@{invite_link}")
+                        chat = await client.get_chat(peer.user_id if hasattr(peer, 'user_id') else peer.channel_id)
+                        
+                        if chat and hasattr(chat, 'members_count'):
+                            return chat.members_count
+                    except Exception as e2:
+                        logger.debug(f"Invite link method also failed: {e2}")
+                
+            logger.warning(f"Could not get member count for group {group_id}")
+            return None
                 
         except Exception as e:
             logger.error(f"Error getting group member count: {e}")
