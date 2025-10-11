@@ -15,23 +15,25 @@ class CooldownRecord:
     """Cooldown record"""
     user_id: int
     last_invite_time: float
-    invite_count_today: int
-    last_reset_date: str
     blocked_until: Optional[float] = None
 
 class CooldownManager:
     """Cooldown and spam protection manager"""
     
-    def __init__(self, data_dir: str = "data"):
+    def __init__(self, data_dir: str = "data", config=None):
         self.data_dir = data_dir
         self.cooldowns_file = os.path.join(data_dir, "cooldowns.json")
         self.user_cooldowns: Dict[int, CooldownRecord] = {}
         self.group_last_invite: Dict[int, float] = {}  # group_id -> timestamp
         
-        # Cooldown settings
-        self.invite_cooldown_seconds = 300  # 5 minutes between invitations
-        self.group_cooldown_seconds = 60    # 1 minute between group invitations
-        self.max_invites_per_day = 10       # Maximum invitations per day
+        # Cooldown settings - use config if provided, otherwise defaults
+        if config:
+            self.invite_cooldown_seconds = config.invite_cooldown_seconds
+            self.group_cooldown_seconds = config.group_cooldown_seconds  
+        else:
+            self.invite_cooldown_seconds = 180  # 3 minutes between invitations (default)
+            self.group_cooldown_seconds = 3     # 3 seconds between group invitations (default)
+        
         self.ban_duration_hours = 24        # Ban duration in hours
         
         self.load_cooldowns()
@@ -62,7 +64,6 @@ class CooldownManager:
                 data[str(user_id)] = {
                     'user_id': record.user_id,
                     'last_invite_time': record.last_invite_time,
-                    'invite_count_today': record.invite_count_today,
                     'last_reset_date': record.last_reset_date,
                     'blocked_until': record.blocked_until
                 }
@@ -84,7 +85,6 @@ class CooldownManager:
             self.user_cooldowns[user_id] = CooldownRecord(
                 user_id=user_id,
                 last_invite_time=0,
-                invite_count_today=0,
                 last_reset_date=today
             )
         
@@ -97,15 +97,10 @@ class CooldownManager:
             minutes = (remaining_time % 3600) // 60
             return False, f"You are blocked until {time.strftime('%H:%M %d.%m.%Y', time.localtime(record.blocked_until))} ({hours}h {minutes}m remaining)"
         
-        # Reset daily counter if new day
+        # Reset blocked status if new day
         if record.last_reset_date != today:
-            record.invite_count_today = 0
             record.last_reset_date = today
             record.blocked_until = None
-        
-        # Check daily limit
-        if record.invite_count_today >= self.max_invites_per_day:
-            return False, f"You have reached the daily invitation limit ({self.max_invites_per_day}). Try again tomorrow."
         
         # Check cooldown between invitations
         time_since_last = current_time - record.last_invite_time
@@ -127,7 +122,6 @@ class CooldownManager:
             self.user_cooldowns[user_id] = CooldownRecord(
                 user_id=user_id,
                 last_invite_time=0,
-                invite_count_today=0,
                 last_reset_date=today
             )
         
@@ -140,9 +134,8 @@ class CooldownManager:
             minutes = (remaining_time % 3600) // 60
             return False, f"You are blocked until {time.strftime('%H:%M %d.%m.%Y', time.localtime(record.blocked_until))} ({hours}h {minutes}m remaining)"
         
-        # Reset daily counter if new day
+        # Reset blocked status if new day
         if record.last_reset_date != today:
-            record.invite_count_today = 0
             record.last_reset_date = today
             record.blocked_until = None
         
@@ -176,13 +169,6 @@ class CooldownManager:
         if user_id in self.user_cooldowns:
             record = self.user_cooldowns[user_id]
             record.last_invite_time = current_time
-            
-            if success:
-                record.invite_count_today += 1
-                
-                # Check if user reached the limit
-                if record.invite_count_today >= self.max_invites_per_day:
-                    logger.warning(f"User {user_id} reached daily invitation limit")
         
         # Update last invitation time to group
         if success:
@@ -200,7 +186,6 @@ class CooldownManager:
             self.user_cooldowns[user_id] = CooldownRecord(
                 user_id=user_id,
                 last_invite_time=current_time,
-                invite_count_today=0,
                 last_reset_date=today
             )
         else:
@@ -221,7 +206,6 @@ class CooldownManager:
             self.user_cooldowns[user_id] = CooldownRecord(
                 user_id=user_id,
                 last_invite_time=current_time,
-                invite_count_today=0,
                 last_reset_date=today
             )
         
@@ -241,7 +225,6 @@ class CooldownManager:
         """Get user statistics"""
         if user_id not in self.user_cooldowns:
             return {
-                "invite_count_today": 0,
                 "last_invite_time": 0,
                 "is_blocked": False,
                 "blocked_until": None,
@@ -252,15 +235,13 @@ class CooldownManager:
         current_time = time.time()
         
         is_blocked = record.blocked_until and current_time < record.blocked_until
-        can_invite, _ = self.can_user_request_invite(user_id)
+        can_invite, _ = self.can_user_request_invite_simple(user_id)
         
         return {
-            "invite_count_today": record.invite_count_today,
             "last_invite_time": record.last_invite_time,
             "is_blocked": is_blocked,
             "blocked_until": record.blocked_until,
-            "can_invite": can_invite,
-            "remaining_invites": max(0, self.max_invites_per_day - record.invite_count_today)
+            "can_invite": can_invite
         }
     
     def reset_daily_stats(self):
@@ -268,7 +249,6 @@ class CooldownManager:
         today = time.strftime("%Y-%m-%d")
         
         for record in self.user_cooldowns.values():
-            record.invite_count_today = 0
             record.last_reset_date = today
             # Don't reset blocks - they should expire naturally
         
@@ -296,29 +276,22 @@ class CooldownManager:
         total_users = len(self.user_cooldowns)
         active_blocks = sum(1 for r in self.user_cooldowns.values() 
                            if r.blocked_until and current_time < r.blocked_until)
-        total_invites_today = sum(r.invite_count_today for r in self.user_cooldowns.values())
         
         return {
             "total_users": total_users,
             "active_blocks": active_blocks,
-            "total_invites_today": total_invites_today,
-            "max_invites_per_day": self.max_invites_per_day,
             "invite_cooldown_seconds": self.invite_cooldown_seconds,
             "group_cooldown_seconds": self.group_cooldown_seconds
         }
     
     def update_settings(self, invite_cooldown: Optional[int] = None, 
-                       group_cooldown: Optional[int] = None,
-                       max_invites: Optional[int] = None):
+                       group_cooldown: Optional[int] = None):
         """Update cooldown settings"""
         if invite_cooldown is not None:
             self.invite_cooldown_seconds = invite_cooldown
         
         if group_cooldown is not None:
             self.group_cooldown_seconds = group_cooldown
-        
-        if max_invites is not None:
-            self.max_invites_per_day = max_invites
         
         logger.info("Cooldown settings updated")
     
@@ -333,7 +306,6 @@ class CooldownManager:
                 recent_activity.append({
                     "user_id": record.user_id,
                     "last_invite_time": record.last_invite_time,
-                    "invite_count_today": record.invite_count_today,
                     "is_blocked": record.blocked_until and current_time < record.blocked_until
                 })
         

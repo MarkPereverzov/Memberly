@@ -49,7 +49,7 @@ class InviteBot:
         self.config_manager = ConfigManager(config_dir)
         self.account_manager = AccountManager(self.config_manager)
         self.group_manager = GroupManager(self.config_manager)
-        self.cooldown_manager = CooldownManager()
+        self.cooldown_manager = CooldownManager(config=self.config_manager.bot_config)
         
         # Initialize database and whitelist managers
         db_path = os.path.join(data_dir, "bot_database.db")
@@ -285,10 +285,8 @@ To get an invitation, use the /invite command
         else:
             status_text += "❌ **Not whitelisted**\n"
         
-        # Invitation statistics
-        status_text += f"\n🎫 **Invitations:**\n"
-        status_text += f"• Today: {user_stats['invite_count_today']}/{self.cooldown_manager.max_invites_per_day}\n"
-        status_text += f"• Remaining: {user_stats['remaining_invites']}\n"
+        # Cooldown status
+        status_text += f"\n⏰ **Cooldown Status:**\n"
         
         # Block status
         if user_stats['is_blocked']:
@@ -492,8 +490,8 @@ To get an invitation, use the /invite command
         
         if len(context.args) < 3:
             await update.message.reply_text(
-                "Usage: /add_group <group_id> <group_name> <invite_link> [max_daily_invites]\n"
-                "Example: /add_group -1001234567890 \"Test Group\" https://t.me/+abc123 100"
+                "Usage: /add_group <group_id> <group_name> <invite_link>\n"
+                "Example: /add_group -1001234567890 \"Test Group\" https://t.me/+abc123"
             )
             return
         
@@ -501,13 +499,12 @@ To get an invitation, use the /invite command
             group_id = int(context.args[0])
             group_name = context.args[1]
             invite_link = context.args[2]
-            max_daily_invites = int(context.args[3]) if len(context.args) > 3 else 100
             
             if not invite_link.startswith('https://t.me/'):
                 await update.message.reply_text("❌ Invalid invite link. Must start with https://t.me/")
                 return
             
-            success = self.group_manager.add_group(group_id, group_name, invite_link, max_daily_invites)
+            success = self.group_manager.add_group(group_id, group_name, invite_link)
             
             if success:
                 await update.message.reply_text(f"✅ Group '{group_name}' added successfully.")
@@ -558,7 +555,7 @@ To get an invitation, use the /invite command
         text += f"📊 **Overall Statistics:**\n"
         text += f"• Total groups: {group_stats['total_groups']}\n"
         text += f"• Active groups: {group_stats['active_groups']}\n"
-        text += f"• Daily invitations: {group_stats['total_daily_invites']}\n"
+
         
         if db_stats:
             text += f"• Average members: {int(db_stats.get('average_member_count', 0))}\n"
@@ -571,7 +568,7 @@ To get an invitation, use the /invite command
         for group in group_stats['groups_details'][:10]:  # Show first 10 groups
             status = "✅" if group['is_active'] else "❌"
             text += f"{status} {group['group_name']}\n"
-            text += f"   📈 {group['daily_invites']}/{group['max_daily_invites']} invitations today\n"
+            text += f"   � Active: {'✅' if group['is_active'] else '❌'}\n"
         
         if len(group_stats['groups_details']) > 10:
             text += f"\n... and {len(group_stats['groups_details']) - 10} more groups"
@@ -648,8 +645,7 @@ To get an invitation, use the /invite command
             text += "No accounts found."
         else:
             for account in page_accounts:
-                daily_invites = account.get('daily_invites', 0)
-                text += f"• {account['session_name']} - {daily_invites} invitations\n"
+                text += f"• {account['session_name']} - Active\n"
         
         # Build pagination keyboard
         keyboard = []
@@ -689,8 +685,7 @@ To get an invitation, use the /invite command
             text += "No groups found."
         else:
             for group in page_groups:
-                daily_invites = group.get('daily_invites', 0)
-                text += f"• {group['group_name']} - {daily_invites} invitations\n"
+                text += f"• {group['group_name']} - Active\n"
         
         # Build pagination keyboard
         keyboard = []
@@ -751,12 +746,11 @@ To get an invitation, use the /invite command
         stats_text += f"📤 Total: {db_stats.get('total_invitations_30d', 0)}\n"
         stats_text += f"✅ Successful: {db_stats.get('successful_invitations_30d', 0)}\n"
         stats_text += f"📊 Success rate: {db_stats.get('success_rate_30d', 0)}%\n"
-        stats_text += f"🎫 Today: {cooldown_stats['total_invites_today']}\n"
+
         
         stats_text += f"\n**Accounts:**\n"
         stats_text += f"👤 Total: {account_stats['total_accounts']}\n"
         stats_text += f"✅ Active: {account_stats['active_accounts']}\n"
-        stats_text += f"📤 Daily invites: {account_stats['total_daily_invites']}\n"
         
         stats_text += f"\n**Groups:**\n"
         stats_text += f"🏢 Total: {group_stats['total_groups']}\n"

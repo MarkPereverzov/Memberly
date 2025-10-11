@@ -81,9 +81,7 @@ class AccountManager:
             if not account.is_active:
                 continue
                 
-            # Check if daily limit is not exceeded
-            if account.daily_invites_count >= 50:  # Daily invitation limit
-                continue
+
                 
             # Check account cooldown
             if time.time() - account.last_used < 60:  # 1 minute between uses
@@ -99,8 +97,8 @@ class AccountManager:
         if not available_accounts:
             return None
         
-        # Select account with least invitations per day
-        return min(available_accounts, key=lambda x: x.daily_invites_count)
+        # Return first available account
+        return available_accounts[0]
     
     def get_active_accounts(self) -> List[UserAccount]:
         """Get all active accounts"""
@@ -121,7 +119,6 @@ class AccountManager:
             
             # Update account statistics
             account.last_used = time.time()
-            account.daily_invites_count += 1
             
             # Save changes
             self.config_manager.save_accounts(self.accounts)
@@ -174,13 +171,7 @@ class AccountManager:
             logger.error(f"Error getting link for group {group_id}: {e}")
             return None
     
-    def reset_daily_stats(self):
-        """Reset daily statistics (call once per day)"""
-        for account in self.accounts:
-            account.daily_invites_count = 0
-        
-        self.config_manager.save_accounts(self.accounts)
-        logger.info("Daily account statistics reset")
+
     
     async def shutdown(self):
         """Shutdown manager"""
@@ -197,18 +188,15 @@ class AccountManager:
         """Get account statistics"""
         total_accounts = len(self.accounts)
         active_accounts = len([acc for acc in self.accounts if acc.is_active])
-        total_daily_invites = sum(acc.daily_invites_count for acc in self.accounts)
         
         return {
             "total_accounts": total_accounts,
             "active_accounts": active_accounts,
-            "total_daily_invites": total_daily_invites,
             "accounts_details": [
                 {
                     "session_name": acc.session_name,
                     "phone": acc.phone,
                     "is_active": acc.is_active,
-                    "daily_invites": acc.daily_invites_count,
                     "last_used": acc.last_used
                 }
                 for acc in self.accounts

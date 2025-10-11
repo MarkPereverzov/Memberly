@@ -12,9 +12,8 @@ class BotConfig:
     bot_token: str
     admin_user_ids: List[int]
     whitelist_user_ids: List[int]
-    invite_cooldown_seconds: int = 300  # 5 minutes between invitations
-    group_cooldown_seconds: int = 60    # 1 minute between invitations to different groups
-    max_invites_per_day: int = 50       # Maximum invitations per day per user
+    invite_cooldown_seconds: int = 180  # 3 minutes between invitations (from .env)
+    group_cooldown_seconds: int = 3     # 3 seconds between invitations to different groups (from .env)
     
     @classmethod
     def from_env(cls):
@@ -33,9 +32,8 @@ class BotConfig:
             bot_token=bot_token,
             admin_user_ids=admin_user_ids,
             whitelist_user_ids=whitelist_user_ids,
-            invite_cooldown_seconds=int(os.getenv('INVITE_COOLDOWN_SECONDS', 300)),
-            group_cooldown_seconds=int(os.getenv('GROUP_COOLDOWN_SECONDS', 60)),
-            max_invites_per_day=int(os.getenv('MAX_INVITES_PER_DAY', 50))
+            invite_cooldown_seconds=int(os.getenv('INVITE_COOLDOWN_SECONDS', 180)),
+            group_cooldown_seconds=int(os.getenv('GROUP_COOLDOWN_SECONDS', 3))
         )
 
 @dataclass
@@ -47,7 +45,6 @@ class UserAccount:
     phone: str
     is_active: bool = True
     last_used: float = 0.0
-    daily_invites_count: int = 0
     groups_assigned: List[int] = None
     
     def __post_init__(self):
@@ -62,8 +59,6 @@ class TelegramGroup:
     invite_link: str
     is_active: bool = True
     assigned_accounts: List[str] = None  # session_names of accounts
-    max_daily_invites: int = 100
-    current_daily_invites: int = 0
     
     def __post_init__(self):
         if self.assigned_accounts is None:
@@ -103,7 +98,6 @@ class ConfigManager:
                 'phone': account.phone,
                 'is_active': account.is_active,
                 'last_used': account.last_used,
-                'daily_invites_count': account.daily_invites_count,
                 'groups_assigned': account.groups_assigned
             }
             data.append(account_dict)
@@ -134,9 +128,7 @@ class ConfigManager:
                 'group_name': group.group_name,
                 'invite_link': group.invite_link,
                 'is_active': group.is_active,
-                'assigned_accounts': group.assigned_accounts,
-                'max_daily_invites': group.max_daily_invites,
-                'current_daily_invites': group.current_daily_invites
+                'assigned_accounts': group.assigned_accounts
             }
             data.append(group_dict)
         

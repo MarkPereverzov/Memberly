@@ -30,10 +30,6 @@ class GroupManager:
             if not group.is_active:
                 continue
                 
-            # Check if daily invitation limit for the group has been reached
-            if group.current_daily_invites >= group.max_daily_invites:
-                continue
-                
             # Check if the user has already been invited to this group
             if group.group_id in user_invites:
                 # Check cooldown (e.g., 24 hours)
@@ -63,9 +59,7 @@ class GroupManager:
         if not available_groups:
             return None
         
-        # Sort groups by invitation count (fewer invitations = higher priority)
-        available_groups.sort(key=lambda x: x.current_daily_invites)
-        
+        # Return the first available group (all groups are equally valid now)
         return available_groups[0]
     
     def record_invitation(self, user_id: int, group_id: int) -> bool:
@@ -80,9 +74,6 @@ class GroupManager:
             self.user_invitations[user_id] = {}
         
         self.user_invitations[user_id][group_id] = time.time()
-        
-        # Increment invitation counter for the group
-        group.current_daily_invites += 1
         
         # Save changes
         self.config_manager.save_groups(self.groups)
@@ -130,31 +121,21 @@ class GroupManager:
         
         return True
     
-    def reset_daily_stats(self):
-        """Reset daily group statistics"""
-        for group in self.groups:
-            group.current_daily_invites = 0
-        
-        self.config_manager.save_groups(self.groups)
-        logger.info("Daily group statistics reset")
+
     
     def get_group_stats(self) -> Dict:
         """Get group statistics"""
         total_groups = len(self.groups)
         active_groups = len([g for g in self.groups if g.is_active])
-        total_daily_invites = sum(g.current_daily_invites for g in self.groups)
         
         return {
             "total_groups": total_groups,
             "active_groups": active_groups,
-            "total_daily_invites": total_daily_invites,
             "groups_details": [
                 {
                     "group_id": group.group_id,
                     "group_name": group.group_name,
                     "is_active": group.is_active,
-                    "daily_invites": group.current_daily_invites,
-                    "max_daily_invites": group.max_daily_invites,
                     "assigned_accounts": group.assigned_accounts,
                     "invite_link": group.invite_link
                 }
@@ -178,12 +159,10 @@ class GroupManager:
         logger.info(f"Group {group.group_name} updated")
         return True
     
-    def add_group(self, group_id: int, group_name: str, invite_link: str, 
-                  max_daily_invites: int = 100) -> bool:
+    def add_group(self, group_id: int, group_name: str, invite_link: str) -> bool:
         """Add new group"""
         try:
             new_group = self.config_manager.add_group(group_id, group_name, invite_link)
-            new_group.max_daily_invites = max_daily_invites
             
             # Reload group list
             self.groups = self.config_manager.load_groups()
@@ -228,8 +207,6 @@ class GroupManager:
             if group.is_active and not group.assigned_accounts:
                 issues.append(f"Group {group.group_name}: no assigned accounts")
             
-            # Check limits
-            if group.max_daily_invites <= 0:
-                issues.append(f"Group {group.group_name}: invalid invitation limit")
+            # Basic validation (limits removed)
         
         return issues
