@@ -384,7 +384,7 @@ To get an invitation, use the /invite command
             return
         
         if not context.args:
-            await update.message.reply_text("Usage: /block <user_id> [hours]")
+            await update.message.reply_text("Usage: /block @username [hours]")
             return
         
         try:
@@ -404,7 +404,7 @@ To get an invitation, use the /invite command
             return
         
         if not context.args:
-            await update.message.reply_text("Usage: /unblock <user_id>")
+            await update.message.reply_text("Usage: /unblock @username")
             return
         
         try:
@@ -493,8 +493,8 @@ To get an invitation, use the /invite command
         
         if len(context.args) < 2:
             await update.message.reply_text(
-                "Usage: /whitelist <user_id> <days> [username]\n"
-                "Example: /whitelist 123456789 30 @username"
+                "Usage: /whitelist @username <days>\n"
+                "Example: /whitelist @john_doe 30"
             )
             return
         
@@ -533,7 +533,7 @@ To get an invitation, use the /invite command
             return
         
         if not context.args:
-            await update.message.reply_text("Usage: /remove_whitelist <user_id>")
+            await update.message.reply_text("Usage: /remove_whitelist @username")
             return
         
         try:
