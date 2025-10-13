@@ -5,14 +5,13 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime
 from typing import Dict, List
 
 # Добавляем путь к модулям
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
 
 from config.config import ConfigManager, BotConfig
@@ -102,26 +101,24 @@ class InviteBot:
     
     def _register_handlers(self):
         """Register command handlers"""
+        # User commands
         self.application.add_handler(CommandHandler("start", self.start_command))
         self.application.add_handler(CommandHandler("invite", self.invite_command))
         self.application.add_handler(CommandHandler("status", self.status_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         
-        # Admin commands
-        self.application.add_handler(CommandHandler("admin", self.admin_command))
-        self.application.add_handler(CommandHandler("whitelist", self.whitelist_command))
-        self.application.add_handler(CommandHandler("remove_whitelist", self.remove_whitelist_command))
+        # Admin commands - Group & Account Management
+        self.application.add_handler(CommandHandler("groups_info", self.groups_info_command))
+        self.application.add_handler(CommandHandler("accounts_info", self.accounts_info_command))
         self.application.add_handler(CommandHandler("add_group", self.add_group_command))
         self.application.add_handler(CommandHandler("remove_group", self.remove_group_command))
-        self.application.add_handler(CommandHandler("groups_info", self.groups_info_command))
-        self.application.add_handler(CommandHandler("force_stats", self.force_stats_command))
         self.application.add_handler(CommandHandler("join_groups", self.join_groups_command))
+        
+        # Admin commands - User Management
+        self.application.add_handler(CommandHandler("whitelist", self.whitelist_command))
+        self.application.add_handler(CommandHandler("remove_whitelist", self.remove_whitelist_command))
         self.application.add_handler(CommandHandler("block", self.block_user_command))
         self.application.add_handler(CommandHandler("unblock", self.unblock_user_command))
-        self.application.add_handler(CommandHandler("reset", self.reset_stats_command))
-        
-        # Callback button handler
-        self.application.add_handler(CallbackQueryHandler(self.button_callback))
     
     def _is_admin(self, user_id: int) -> bool:
         """Check if user is an administrator"""
@@ -142,12 +139,12 @@ Hello, {user.first_name}!
 
 This bot will help you get invitations to our groups.
 
-**Available commands:**
-• /invite - Get an invitation to a group
-• /status - Check your status
-• /help - Help
+**📋 Basic commands:**
+• `/invite` - Get invitations to all groups
+• `/status` - Check your status
+• `/help` - Complete command reference
 
-To get an invitation, use the /invite command
+To get an invitation, use the `/invite` command
         """
         
         await update.message.reply_text(
@@ -275,107 +272,73 @@ To get an invitation, use the /invite command
         """Handler for /status command"""
         user_id = update.effective_user.id
         
-        # Get access information
-        can_access, reason = self.whitelist_manager.can_user_access(user_id)
-        if not can_access:
-            await update.message.reply_text(f"❌ {reason}")
-            return
-        
-        # Get user statistics
-        user_stats = self.cooldown_manager.get_user_stats(user_id)
-        access_info = self.whitelist_manager.get_user_access_info(user_id)
-        
-        status_text = f"📊 **Your Status**\n\n"
-        
-        # Access level
-        if access_info['is_admin']:
-            status_text += "👑 **Administrator**\n"
-        elif access_info['is_whitelisted']:
-            status_text += f"✅ **Whitelisted** ({access_info['days_remaining']} days remaining)\n"
+        # Check access level
+        if self._is_admin(user_id):
+            status_text = "👑 **You are an administrator**"
+        elif self._is_whitelisted(user_id):
+            status_text = "✅ **You are whitelisted**"
         else:
-            status_text += "❌ **Not whitelisted**\n"
-        
-        # Cooldown status
-        status_text += f"\n⏰ **Cooldown Status:**\n"
-        
-        # Block status
-        if user_stats['is_blocked']:
-            block_until = datetime.fromtimestamp(user_stats['blocked_until'])
-            status_text += f"\n🚫 **Blocked until:** {block_until.strftime('%H:%M %d.%m.%Y')}\n"
-        else:
-            status_text += f"\n✅ **Status:** Active\n"
-        
-        # Cooldown status
-        can_invite, cooldown_msg = self.cooldown_manager.can_user_request_invite(user_id)
-        if can_invite:
-            status_text += "⏰ **Next invitation:** Available now\n"
-        else:
-            status_text += f"⏰ **Next invitation:** {cooldown_msg}\n"
+            status_text = "❌ **You are not whitelisted, please contact the administrator**"
         
         await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /help command"""
         user_id = update.effective_user.id
-        is_admin = self._is_admin(user_id)
         
-        help_text = "🆘 Help\n\n"
+        help_text = "🆘 **Help**\n\n"
         
-        help_text += "Basic Commands:\n"
-        help_text += "• /start - Welcome message\n"
-        help_text += "• /invite - Get an invitation to a group\n"
-        help_text += "• /status - Check your status\n"
-        help_text += "• /groups_info - View groups information\n"
-        help_text += "• /help - This help\n"
+        if self._is_admin(user_id):
+            # Admin commands
+            help_text += "**📋 User commands:**\n"
+            help_text += "• `/start` - Welcome message\n"
+            help_text += "• `/invite` - Get invitations to all groups\n"
+            help_text += "• `/status` - Check your status\n"
+            help_text += "• `/help` - This help\n\n"
+            
+            help_text += "**👑 Administrator commands:**\n\n"
+            
+            help_text += "*Group and account management:*\n"
+            help_text += "• `/groups_info` - List groups with IDs and members\n"
+            help_text += "• `/accounts_info` - List accounts with statuses\n"
+            help_text += "• `/add_group (id) (name) (link)` - Add group\n"
+            help_text += "• `/remove_group (id)` - Remove group\n"
+            help_text += "• `/join_groups` - Join all accounts to groups\n\n"
+            
+            help_text += "*User management:*\n"
+            help_text += "• `/whitelist @username (days)` - Add to whitelist\n"
+            help_text += "• `/remove_whitelist @username` - Remove from whitelist\n"
+            help_text += "• `/block @username [hours]` - Block user\n"
+            help_text += "• `/unblock @username` - Unblock user\n"
+            
+        elif self._is_whitelisted(user_id):
+            # Whitelisted user commands
+            help_text += "**📋 Доступные команды:**\n"
+            help_text += "• `/start` - Приветственное сообщение\n"
+            help_text += "• `/invite` - Получить приглашения во все группы\n"
+            help_text += "• `/status` - Проверить свой статус\n"
+            help_text += "• `/help` - Эта справка\n\n"
+            
+            help_text += "**ℹ️ Как получить приглашение:**\n"
+            help_text += "1. Используйте команду `/invite`\n"
+            help_text += "2. Дождитесь обработки запроса\n"
+            help_text += "3. Проверьте личные сообщения\n\n"
+            
+            help_text += "**⚠️ Ограничения:**\n"
+            help_text += "• Доступно только пользователям в whitelist\n"
+            help_text += "• Между приглашениями есть кулдаун\n"
+            
+        else:
+            # Non-whitelisted user
+            help_text += "**❌ Доступ ограничен**\n\n"
+            help_text += "Вы не находитесь в whitelist.\n"
+            help_text += "Для получения доступа к боту обратитесь к администратору.\n\n"
+            help_text += "**📋 Доступные команды:**\n"
+            help_text += "• `/start` - Приветственное сообщение\n"
+            help_text += "• `/status` - Проверить свой статус\n"
+            help_text += "• `/help` - Эта справка\n"
         
-        if is_admin:
-            help_text += "\nAdmin Commands:\n"
-            help_text += "• /admin - Admin panel\n"
-            help_text += "• /whitelist (user_id) (days) - Add user to whitelist\n"
-            help_text += "• /remove_whitelist (user_id) - Remove from whitelist\n"
-            help_text += "• /add_group (id) (name) (link) - Add group\n"
-            help_text += "• /remove_group (id) - Remove group\n"
-            help_text += "• /force_stats - Force statistics collection\n"
-            help_text += "• /block (user_id) [hours] - Block user\n"
-            help_text += "• /unblock (user_id) - Unblock user\n"
-            help_text += "• /reset - Reset daily statistics\n"
-            help_text += "• /join_groups - Auto-join all accounts to groups\n"
-        
-        help_text += "\nHow to get an invitation:\n"
-        help_text += "1. Use the /invite command\n"
-        help_text += "2. Wait for request processing\n"
-        help_text += "3. Check your private messages\n"
-        
-        help_text += "\nLimitations:\n"
-        help_text += "• Only available to whitelisted users\n"
-        
-        help_text += "\nFor questions, contact the administrator."
-        
-        await update.message.reply_text(help_text)
-    
-    async def admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler for /admin command"""
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
-            return
-        
-        keyboard = [
-            [
-                InlineKeyboardButton("👥 Accounts", callback_data="admin_accounts_0"),
-                InlineKeyboardButton("🏢 Groups", callback_data="admin_groups_0")
-            ],
-            [
-                InlineKeyboardButton("📊 Statistics", callback_data="admin_statistics")
-            ]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            "🔧 **Admin Panel**\n\nSelect section:",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
     
     async def block_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /block command"""
@@ -388,14 +351,21 @@ To get an invitation, use the /invite command
             return
         
         try:
-            user_id = int(context.args[0])
+            username_arg = context.args[0]
             hours = int(context.args[1]) if len(context.args) > 1 else 24
             
+            # Remove @ if present
+            username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
+            
+            # For now, we'll use a placeholder user_id (0) since we're working with usernames
+            # In a real implementation, you'd want to resolve the username to a user_id
+            user_id = 0  # Placeholder - you may need to implement username resolution
+            
             self.cooldown_manager.block_user(user_id, hours)
-            await update.message.reply_text(f"✅ User {user_id} blocked for {hours} hours.")
+            await update.message.reply_text(f"✅ User @{username} blocked for {hours} hours.")
             
         except ValueError:
-            await update.message.reply_text("❌ Invalid format. Use numbers.")
+            await update.message.reply_text("❌ Invalid format. Hours must be a number.")
     
     async def unblock_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /unblock command"""
@@ -407,25 +377,17 @@ To get an invitation, use the /invite command
             await update.message.reply_text("Usage: /unblock @username")
             return
         
-        try:
-            user_id = int(context.args[0])
-            self.cooldown_manager.unblock_user(user_id)
-            await update.message.reply_text(f"✅ User {user_id} unblocked.")
-            
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID.")
-    
-    async def reset_stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler for /reset command"""
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
-            return
+        username_arg = context.args[0]
         
-        self.cooldown_manager.reset_daily_stats()
-        self.account_manager.reset_daily_stats()
-        self.group_manager.reset_daily_stats()
+        # Remove @ if present
+        username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
         
-        await update.message.reply_text("✅ Daily statistics reset.")
+        # For now, we'll use a placeholder user_id (0) since we're working with usernames
+        # In a real implementation, you'd want to resolve the username to a user_id
+        user_id = 0  # Placeholder - you may need to implement username resolution
+        
+        self.cooldown_manager.unblock_user(user_id)
+        await update.message.reply_text(f"✅ User @{username} unblocked.")
     
     async def join_groups_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /join_groups command - automatically join all accounts to all groups"""
@@ -499,21 +461,27 @@ To get an invitation, use the /invite command
             return
         
         try:
-            user_id = int(context.args[0])
+            username_arg = context.args[0]
             days = int(context.args[1])
-            username = context.args[2] if len(context.args) > 2 else None
+            
+            # Remove @ if present
+            username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
             
             if days <= 0:
                 await update.message.reply_text("❌ Days must be a positive number.")
                 return
             
+            # For now, we'll use a placeholder user_id (0) since we're working with usernames
+            # In a real implementation, you'd want to resolve the username to a user_id
+            user_id = 0  # Placeholder - you may need to implement username resolution
+            
             success = self.whitelist_manager.add_to_whitelist(
-                user_id, days, update.effective_user.id, username
+                user_id, days, update.effective_user.id, f"@{username}"
             )
             
             if success:
                 await update.message.reply_text(
-                    f"✅ User {user_id} added to whitelist for {days} days."
+                    f"✅ User @{username} added to whitelist for {days} days."
                 )
                 
                 # Record in database
@@ -524,7 +492,7 @@ To get an invitation, use the /invite command
                 await update.message.reply_text("❌ Failed to add user to whitelist.")
                 
         except ValueError:
-            await update.message.reply_text("❌ Invalid format. User ID and days must be numbers.")
+            await update.message.reply_text("❌ Invalid format. Days must be a number.")
     
     async def remove_whitelist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /remove_whitelist command"""
@@ -536,18 +504,21 @@ To get an invitation, use the /invite command
             await update.message.reply_text("Usage: /remove_whitelist @username")
             return
         
-        try:
-            user_id = int(context.args[0])
-            
-            success = self.whitelist_manager.remove_from_whitelist(user_id)
-            
-            if success:
-                await update.message.reply_text(f"✅ User {user_id} removed from whitelist.")
-            else:
-                await update.message.reply_text(f"❌ User {user_id} not found in whitelist.")
-                
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID.")
+        username_arg = context.args[0]
+        
+        # Remove @ if present
+        username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
+        
+        # For now, we'll use a placeholder user_id (0) since we're working with usernames
+        # In a real implementation, you'd want to resolve the username to a user_id
+        user_id = 0  # Placeholder - you may need to implement username resolution
+        
+        success = self.whitelist_manager.remove_from_whitelist(user_id)
+        
+        if success:
+            await update.message.reply_text(f"✅ User @{username} removed from whitelist.")
+        else:
+            await update.message.reply_text(f"❌ User @{username} not found in whitelist.")
     
     async def add_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /add_group command"""
@@ -606,12 +577,8 @@ To get an invitation, use the /invite command
     
     async def groups_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /groups_info command"""
-        user_id = update.effective_user.id
-        
-        # Check access
-        can_access, reason = self.whitelist_manager.can_user_access(user_id)
-        if not can_access:
-            await update.message.reply_text(f"❌ {reason}")
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
             return
         
         # Get group statistics
@@ -619,220 +586,61 @@ To get an invitation, use the /invite command
         db_stats = self.database_manager.get_overall_statistics()
         
         text = "🏢 **Groups Information**\n\n"
-        text += f"📊 **Overall Statistics:**\n"
-        text += f"• Total groups: {group_stats['total_groups']}\n"
-        text += f"• Active groups: {group_stats['active_groups']}\n"
-
         
-        if db_stats:
-            text += f"• Average members: {int(db_stats.get('average_member_count', 0))}\n"
-            largest = db_stats.get('largest_group', {})
-            if largest.get('name') != 'N/A':
-                text += f"• Largest group: {largest['name']} ({largest['member_count']} members)\n"
-        
-        text += f"\n📋 **Group Details:**\n"
-        
-        for group in group_stats['groups_details'][:10]:  # Show first 10 groups
+        for group in group_stats['groups_details']:
+            # Get group info from database for member count
+            group_id = group['group_id']
+            member_count = "Unknown"
+            
+            # Try to get member count from database stats
+            if db_stats and 'groups' in db_stats:
+                for db_group in db_stats.get('groups', []):
+                    if db_group.get('group_id') == group_id:
+                        member_count = db_group.get('member_count', 'Unknown')
+                        break
+            
             status = "✅" if group['is_active'] else "❌"
-            text += f"{status} {group['group_name']}\n"
-            text += f"   � Active: {'✅' if group['is_active'] else '❌'}\n"
+            text += f"{status} **{group['group_name']}** (ID: `{group_id}`)\n"
+            text += f"   👥 Members: {member_count}\n\n"
         
-        if len(group_stats['groups_details']) > 10:
-            text += f"\n... and {len(group_stats['groups_details']) - 10} more groups"
+        if not group_stats['groups_details']:
+            text += "No groups found."
         
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     
-    async def force_stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler for /force_stats command"""
+    async def accounts_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /accounts_info command"""
         if not self._is_admin(update.effective_user.id):
             await update.message.reply_text("❌ This command is only available to administrators.")
             return
         
-        await update.message.reply_text("🔄 Collecting group statistics...")
+        # Get account statistics
+        account_stats = self.account_manager.get_account_stats()
         
-        try:
-            results = await self.group_stats_collector.force_collection()
-            
-            text = f"📊 **Statistics Collection Results**\n\n"
-            text += f"📋 Total groups: {results['total_groups']}\n"
-            text += f"✅ Successful: {results['successful']}\n"
-            text += f"❌ Failed: {results['failed']}\n"
-            
-            if results['errors']:
-                text += f"\n⚠️ **Errors:**\n"
-                for error in results['errors'][:5]:  # Show first 5 errors
-                    text += f"• {error}\n"
+        text = "� **Accounts Information**\n\n"
+        
+        if account_stats['accounts_details']:
+            for account in account_stats['accounts_details']:
+                status = "✅" if account.get('is_active', False) else "❌"
+                text += f"{status} **{account['session_name']}**\n"
                 
-                if len(results['errors']) > 5:
-                    text += f"... and {len(results['errors']) - 5} more errors"
-            
-            await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
-            
-        except Exception as e:
-            await update.message.reply_text(f"❌ Error during statistics collection: {str(e)}")
-            logger.error(f"Error in force_stats_command: {e}")
-    
-    async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Button click handler"""
-        query = update.callback_query
-        await query.answer()
-        
-        if not self._is_admin(query.from_user.id):
-            await query.edit_message_text("❌ Access denied.")
-            return
-        
-        if query.data.startswith("admin_accounts_"):
-            page = int(query.data.split("_")[-1])
-            await self._show_accounts_page(query, page)
-        elif query.data.startswith("admin_groups_"):
-            page = int(query.data.split("_")[-1])
-            await self._show_groups_page(query, page)
-        elif query.data == "admin_statistics":
-            await self._show_statistics(query)
-        elif query.data == "admin_back":
-            await self._show_admin_menu(query)
-    
-    async def _show_accounts_page(self, query, page=0):
-        """Show accounts with pagination"""
-        account_stats = self.account_manager.get_account_stats()
-        accounts = account_stats.get('accounts_details', [])
-        
-        # Calculate pagination
-        items_per_page = 15
-        total_items = len(accounts)
-        total_pages = (total_items - 1) // items_per_page + 1 if total_items > 0 else 1
-        start_idx = page * items_per_page
-        end_idx = start_idx + items_per_page
-        page_accounts = accounts[start_idx:end_idx]
-        
-        # Build message text
-        text = f"👥 **Accounts** (Page {page + 1}/{total_pages})\n\n"
-        
-        if not page_accounts:
+                # Show phone if available
+                if 'phone' in account:
+                    text += f"   📱 Phone: {account['phone']}\n"
+                
+                # Show connection status
+                if account.get('is_connected', False):
+                    username = account.get('username', 'Unknown')
+                    first_name = account.get('first_name', 'Unknown')
+                    text += f"   🔗 Connected: {first_name} (@{username})\n"
+                else:
+                    text += f"   ❌ Not connected\n"
+                
+                text += "\n"
+        else:
             text += "No accounts found."
-        else:
-            for account in page_accounts:
-                text += f"• {account['session_name']} - Active\n"
         
-        # Build pagination keyboard
-        keyboard = []
-        nav_row = []
-        
-        if page > 0:
-            nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_accounts_{page-1}"))
-        if page < total_pages - 1:
-            nav_row.append(InlineKeyboardButton("➡️ Next", callback_data=f"admin_accounts_{page+1}"))
-        
-        if nav_row:
-            keyboard.append(nav_row)
-        
-        # Add back button
-        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_back")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    
-    async def _show_groups_page(self, query, page=0):
-        """Show groups with pagination"""
-        group_stats = self.group_manager.get_group_stats()
-        groups = group_stats.get('groups_details', [])
-        
-        # Calculate pagination
-        items_per_page = 15
-        total_items = len(groups)
-        total_pages = (total_items - 1) // items_per_page + 1 if total_items > 0 else 1
-        start_idx = page * items_per_page
-        end_idx = start_idx + items_per_page
-        page_groups = groups[start_idx:end_idx]
-        
-        # Build message text
-        text = f"🏢 **Groups** (Page {page + 1}/{total_pages})\n\n"
-        
-        if not page_groups:
-            text += "No groups found."
-        else:
-            for group in page_groups:
-                text += f"• {group['group_name']} - Active\n"
-        
-        # Build pagination keyboard
-        keyboard = []
-        nav_row = []
-        
-        if page > 0:
-            nav_row.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"admin_groups_{page-1}"))
-        if page < total_pages - 1:
-            nav_row.append(InlineKeyboardButton("➡️ Next", callback_data=f"admin_groups_{page+1}"))
-        
-        if nav_row:
-            keyboard.append(nav_row)
-        
-        # Add back button
-        keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_back")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    
-    async def _show_admin_menu(self, query):
-        """Show main admin menu"""
-        keyboard = [
-            [
-                InlineKeyboardButton("👥 Accounts", callback_data="admin_accounts_0"),
-                InlineKeyboardButton("🏢 Groups", callback_data="admin_groups_0")
-            ],
-            [
-                InlineKeyboardButton("📊 Statistics", callback_data="admin_statistics")
-            ]
-        ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(
-            "🔧 **Admin Panel**\n\nSelect section:",
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN
-        )
-    
-    async def _show_statistics(self, query):
-        """Show bot statistics"""
-        # Get statistics
-        cooldown_stats = self.cooldown_manager.get_global_stats()
-        account_stats = self.account_manager.get_account_stats()
-        group_stats = self.group_manager.get_group_stats()
-        db_stats = self.database_manager.get_overall_statistics()
-        whitelist_stats = self.whitelist_manager.get_whitelist_stats()
-        
-        stats_text = f"📈 **Bot Statistics**\n\n"
-        
-        stats_text += f"**Users:**\n"
-        stats_text += f"👥 Total users: {cooldown_stats['total_users']}\n"
-        stats_text += f"✅ Active whitelisted: {whitelist_stats['active_users']}\n"
-        stats_text += f"� Administrators: {whitelist_stats['total_admins']}\n"
-        stats_text += f"�🚫 Blocked: {cooldown_stats['active_blocks']}\n"
-        
-        stats_text += f"\n**Invitations (Last 30 days):**\n"
-        stats_text += f"📤 Total: {db_stats.get('total_invitations_30d', 0)}\n"
-        stats_text += f"✅ Successful: {db_stats.get('successful_invitations_30d', 0)}\n"
-        stats_text += f"📊 Success rate: {db_stats.get('success_rate_30d', 0)}%\n"
-
-        
-        stats_text += f"\n**Accounts:**\n"
-        stats_text += f"👤 Total: {account_stats['total_accounts']}\n"
-        stats_text += f"✅ Active: {account_stats['active_accounts']}\n"
-        
-        stats_text += f"\n**Groups:**\n"
-        stats_text += f"🏢 Total: {group_stats['total_groups']}\n"
-        stats_text += f"✅ Active: {group_stats['active_groups']}\n"
-        stats_text += f"� Avg members: {int(db_stats.get('average_member_count', 0))}\n"
-        
-        largest_group = db_stats.get('largest_group', {})
-        if largest_group.get('name') != 'N/A':
-            stats_text += f"🏆 Largest: {largest_group['name']} ({largest_group['member_count']} members)\n"
-        
-        # Add back button
-        keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="admin_back")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(stats_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     
     def start_bot(self):
         """Synchronous bot startup"""
