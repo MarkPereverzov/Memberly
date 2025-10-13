@@ -44,7 +44,6 @@ class UserAccount:
     api_hash: str
     phone: str
     is_active: bool = True
-    last_used: float = 0.0
     groups_assigned: List[int] = None
     
     def __post_init__(self):
@@ -67,82 +66,149 @@ class TelegramGroup:
 class ConfigManager:
     """Configuration manager"""
     
-    def __init__(self, config_dir: str = "config"):
+    def __init__(self, config_dir: str = "config", db_path: str = "data/bot_database.db"):
         self.config_dir = config_dir
-        self.accounts_file = os.path.join(config_dir, "accounts.json")
-        self.groups_file = os.path.join(config_dir, "groups.json")
+        self.db_path = db_path
         self.bot_config = BotConfig.from_env()
         
+        # Import here to avoid circular imports
+        from src.database_manager import DatabaseManager
+        self.db = DatabaseManager(db_path)
+        
     def load_accounts(self) -> List[UserAccount]:
-        """Load user accounts"""
-        if not os.path.exists(self.accounts_file):
+        """Load user accounts from database"""
+        try:
+            db_accounts = self.db.get_all_accounts()
+            accounts = []
+            
+            for db_account in db_accounts:
+                account = UserAccount(
+                    session_name=db_account.session_name,
+                    api_id=db_account.api_id,
+                    api_hash=db_account.api_hash,
+                    phone=db_account.phone,
+                    is_active=db_account.is_active,
+                    groups_assigned=db_account.groups_assigned
+                )
+                accounts.append(account)
+            
+            return accounts
+            
+        except Exception as e:
+            # Fallback to JSON file if database fails
+            accounts_file = os.path.join(self.config_dir, "accounts.json")
+            if os.path.exists(accounts_file):
+                with open(accounts_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                accounts = []
+                for account_data in data:
+                    # Remove last_used if present
+                    if 'last_used' in account_data:
+                        del account_data['last_used']
+                    accounts.append(UserAccount(**account_data))
+                
+                return accounts
+            
             return []
-        
-        with open(self.accounts_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        accounts = []
-        for account_data in data:
-            accounts.append(UserAccount(**account_data))
-        
-        return accounts
     
     def save_accounts(self, accounts: List[UserAccount]):
-        """Save user accounts"""
-        data = []
-        for account in accounts:
-            account_dict = {
-                'session_name': account.session_name,
-                'api_id': account.api_id,
-                'api_hash': account.api_hash,
-                'phone': account.phone,
-                'is_active': account.is_active,
-                'last_used': account.last_used,
-                'groups_assigned': account.groups_assigned
-            }
-            data.append(account_dict)
-        
-        with open(self.accounts_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        """Save user accounts to database"""
+        try:
+            for account in accounts:
+                self.db.add_account(
+                    account.session_name,
+                    account.api_id,
+                    account.api_hash,
+                    account.phone,
+                    account.is_active,
+                    account.groups_assigned
+                )
+        except Exception as e:
+            # Fallback to JSON file if database fails
+            accounts_file = os.path.join(self.config_dir, "accounts.json")
+            data = []
+            for account in accounts:
+                account_dict = {
+                    'session_name': account.session_name,
+                    'api_id': account.api_id,
+                    'api_hash': account.api_hash,
+                    'phone': account.phone,
+                    'is_active': account.is_active,
+                    'groups_assigned': account.groups_assigned
+                }
+                data.append(account_dict)
+            
+            with open(accounts_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
     
     def load_groups(self) -> List[TelegramGroup]:
-        """Load groups"""
-        if not os.path.exists(self.groups_file):
+        """Load groups from database"""
+        try:
+            db_groups = self.db.get_all_groups()
+            groups = []
+            
+            for db_group in db_groups:
+                group = TelegramGroup(
+                    group_id=db_group.group_id,
+                    group_name=db_group.group_name,
+                    invite_link=db_group.invite_link,
+                    is_active=db_group.is_active,
+                    assigned_accounts=db_group.assigned_accounts
+                )
+                groups.append(group)
+            
+            return groups
+            
+        except Exception as e:
+            # Fallback to JSON file if database fails
+            groups_file = os.path.join(self.config_dir, "groups.json")
+            if os.path.exists(groups_file):
+                with open(groups_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                groups = []
+                for group_data in data:
+                    groups.append(TelegramGroup(**group_data))
+                
+                return groups
+            
             return []
-        
-        with open(self.groups_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        
-        groups = []
-        for group_data in data:
-            groups.append(TelegramGroup(**group_data))
-        
-        return groups
     
     def save_groups(self, groups: List[TelegramGroup]):
-        """Save groups"""
-        data = []
-        for group in groups:
-            group_dict = {
-                'group_id': group.group_id,
-                'group_name': group.group_name,
-                'invite_link': group.invite_link,
-                'is_active': group.is_active,
-                'assigned_accounts': group.assigned_accounts
-            }
-            data.append(group_dict)
-        
-        with open(self.groups_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        """Save groups to database"""
+        try:
+            for group in groups:
+                self.db.add_group(
+                    group.group_id,
+                    group.group_name,
+                    group.invite_link,
+                    group.is_active,
+                    group.assigned_accounts
+                )
+        except Exception as e:
+            # Fallback to JSON file if database fails
+            groups_file = os.path.join(self.config_dir, "groups.json")
+            data = []
+            for group in groups:
+                group_dict = {
+                    'group_id': group.group_id,
+                    'group_name': group.group_name,
+                    'invite_link': group.invite_link,
+                    'is_active': group.is_active,
+                    'assigned_accounts': group.assigned_accounts
+                }
+                data.append(group_dict)
+            
+            with open(groups_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
     
     def add_account(self, session_name: str, api_id: int, api_hash: str, phone: str):
         """Add new account"""
-        accounts = self.load_accounts()
-        
         # Check that such account doesn't exist yet
-        for account in accounts:
-            if account.session_name == session_name:
-                raise ValueError(f"Account with session name '{session_name}' already exists")
+        existing_account = self.db.get_account(session_name)
+        if existing_account:
+            raise ValueError(f"Account with session name '{session_name}' already exists")
         
         new_account = UserAccount(
             session_name=session_name,
@@ -151,19 +217,27 @@ class ConfigManager:
             phone=phone
         )
         
-        accounts.append(new_account)
-        self.save_accounts(accounts)
+        # Add to database
+        success = self.db.add_account(
+            session_name=session_name,
+            api_id=api_id,
+            api_hash=api_hash,
+            phone=phone,
+            is_active=True,
+            groups_assigned=[]
+        )
+        
+        if not success:
+            raise ValueError(f"Failed to add account '{session_name}' to database")
         
         return new_account
     
     def add_group(self, group_id: int, group_name: str, invite_link: str):
         """Add new group"""
-        groups = self.load_groups()
-        
         # Check that such group doesn't exist yet
-        for group in groups:
-            if group.group_id == group_id:
-                raise ValueError(f"Group with ID '{group_id}' already exists")
+        existing_group = self.db.get_group(group_id)
+        if existing_group:
+            raise ValueError(f"Group with ID '{group_id}' already exists")
         
         new_group = TelegramGroup(
             group_id=group_id,
@@ -171,7 +245,16 @@ class ConfigManager:
             invite_link=invite_link
         )
         
-        groups.append(new_group)
-        self.save_groups(groups)
+        # Add to database
+        success = self.db.add_group(
+            group_id=group_id,
+            group_name=group_name,
+            invite_link=invite_link,
+            is_active=True,
+            assigned_accounts=[]
+        )
+        
+        if not success:
+            raise ValueError(f"Failed to add group '{group_name}' to database")
         
         return new_group

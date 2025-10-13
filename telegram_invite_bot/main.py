@@ -583,25 +583,27 @@ To get an invitation, use the `/invite` command
         
         # Get group statistics
         group_stats = self.group_manager.get_group_stats()
-        db_stats = self.database_manager.get_overall_statistics()
         
         text = "🏢 **Groups Information**\n\n"
         
         for group in group_stats['groups_details']:
-            # Get group info from database for member count
             group_id = group['group_id']
-            member_count = "Unknown"
+            member_count = group.get('member_count', 0)
+            last_updated = group.get('last_updated', 0)
             
-            # Try to get member count from database stats
-            if db_stats and 'groups' in db_stats:
-                for db_group in db_stats.get('groups', []):
-                    if db_group.get('group_id') == group_id:
-                        member_count = db_group.get('member_count', 'Unknown')
-                        break
+            # Format member count
+            member_text = f"{member_count}" if member_count > 0 else "Unknown"
+            
+            # Format last updated
+            updated_text = ""
+            if last_updated > 0:
+                from datetime import datetime
+                updated_date = datetime.fromtimestamp(last_updated)
+                updated_text = f" (updated: {updated_date.strftime('%Y-%m-%d %H:%M')})"
             
             status = "✅" if group['is_active'] else "❌"
             text += f"{status} **{group['group_name']}** (ID: `{group_id}`)\n"
-            text += f"   👥 Members: {member_count}\n\n"
+            text += f"   👥 Members: {member_text}{updated_text}\n\n"
         
         if not group_stats['groups_details']:
             text += "No groups found."

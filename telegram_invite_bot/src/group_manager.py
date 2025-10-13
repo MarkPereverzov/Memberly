@@ -137,7 +137,9 @@ class GroupManager:
                     "group_name": group.group_name,
                     "is_active": group.is_active,
                     "assigned_accounts": group.assigned_accounts,
-                    "invite_link": group.invite_link
+                    "invite_link": group.invite_link,
+                    "member_count": group.member_count,
+                    "last_updated": group.last_updated
                 }
                 for group in self.groups
             ]

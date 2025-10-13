@@ -81,12 +81,6 @@ class AccountManager:
             if not account.is_active:
                 continue
                 
-
-                
-            # Check account cooldown
-            if time.time() - account.last_used < 60:  # 1 minute between uses
-                continue
-                
             # If group is specified, check if account is assigned to this group
             if group_id and account.groups_assigned:
                 if group_id not in account.groups_assigned:
@@ -117,10 +111,7 @@ class AccountManager:
             
             await client.send_message(user_id, message_text)
             
-            # Update account statistics
-            account.last_used = time.time()
-            
-            # Save changes
+            # Save changes (if needed)
             self.config_manager.save_accounts(self.accounts)
             
             logger.info(f"Invitation sent to user {user_id} via account {account.session_name}")
@@ -196,8 +187,7 @@ class AccountManager:
                 {
                     "session_name": acc.session_name,
                     "phone": acc.phone,
-                    "is_active": acc.is_active,
-                    "last_used": acc.last_used
+                    "is_active": acc.is_active
                 }
                 for acc in self.accounts
             ]

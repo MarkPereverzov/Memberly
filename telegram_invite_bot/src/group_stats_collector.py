@@ -111,8 +111,8 @@ class GroupStatsCollector:
                 member_count = await self._get_group_member_count(account, group_id)
                 
                 if member_count is not None:
-                    # Update database with new statistics
-                    success = self.db.update_group_stats(group_id, group_name, member_count)
+                    # Update database with new statistics  
+                    success = self.db.update_group_member_count(group_id, member_count)
                     
                     if success:
                         logger.debug(f"Updated stats for {group_name}: {member_count} members")
@@ -234,12 +234,12 @@ class GroupStatsCollector:
         """Get historical statistics for a group (placeholder for future implementation)"""
         # This would require storing historical data in the database
         # For now, return current stats
-        current_stats = self.db.get_group_stats(group_id)
+        group = self.group_manager.get_group_by_id(group_id)
         
-        if current_stats:
+        if group and group.member_count > 0:
             return [{
-                "date": datetime.fromtimestamp(current_stats.last_updated).isoformat(),
-                "member_count": current_stats.member_count
+                "date": datetime.fromtimestamp(group.last_updated).isoformat() if group.last_updated > 0 else datetime.now().isoformat(),
+                "member_count": group.member_count
             }]
         
         return []

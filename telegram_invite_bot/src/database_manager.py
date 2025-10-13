@@ -5,6 +5,7 @@ import sqlite3
 import logging
 import time
 import os
+import json
 from typing import List, Optional, Dict, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -33,12 +34,33 @@ class InvitationRecord:
     error_message: Optional[str] = None
 
 @dataclass
-class GroupStats:
-    """Group statistics data"""
+class AccountEntry:
+    """Account entry data"""
+    session_name: str
+    api_id: int
+    api_hash: str
+    phone: str
+    is_active: bool = True
+    groups_assigned: List[int] = None
+    
+    def __post_init__(self):
+        if self.groups_assigned is None:
+            self.groups_assigned = []
+
+@dataclass
+class GroupEntry:
+    """Group entry data"""
     group_id: int
     group_name: str
-    member_count: int
-    last_updated: float
+    invite_link: str
+    is_active: bool = True
+    assigned_accounts: List[str] = None
+    member_count: int = 0
+    last_updated: float = 0.0
+    
+    def __post_init__(self):
+        if self.assigned_accounts is None:
+            self.assigned_accounts = []
 
 class DatabaseManager:
     """Database manager for persistent storage"""
@@ -85,13 +107,42 @@ class DatabaseManager:
                     )
                 ''')
                 
-                # Create group statistics table
+                # Create groups table
                 cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS group_statistics (
+                    CREATE TABLE IF NOT EXISTS groups (
                         group_id INTEGER PRIMARY KEY,
                         group_name TEXT NOT NULL,
-                        member_count INTEGER NOT NULL,
-                        last_updated REAL NOT NULL
+                        invite_link TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT 1,
+                        assigned_accounts TEXT DEFAULT '[]',
+                        member_count INTEGER DEFAULT 0,
+                        last_updated REAL DEFAULT 0
+                    )
+                ''')
+                
+                # Drop old group_statistics table if exists
+                cursor.execute('DROP TABLE IF EXISTS group_statistics')
+                
+                # Add member_count and last_updated columns to groups table if they don't exist
+                try:
+                    cursor.execute('ALTER TABLE groups ADD COLUMN member_count INTEGER DEFAULT 0')
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                
+                try:
+                    cursor.execute('ALTER TABLE groups ADD COLUMN last_updated REAL DEFAULT 0')
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                
+                # Create accounts table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS accounts (
+                        session_name TEXT PRIMARY KEY,
+                        api_id INTEGER NOT NULL,
+                        api_hash TEXT NOT NULL,
+                        phone TEXT NOT NULL,
+                        is_active BOOLEAN DEFAULT 1,
+                        groups_assigned TEXT DEFAULT '[]'
                     )
                 ''')
                 
@@ -315,61 +366,45 @@ class DatabaseManager:
                    "failed_invitations": 0, "success_rate": 0, "period_days": days}
     
     # Group statistics methods
-    def update_group_stats(self, group_id: int, group_name: str, member_count: int) -> bool:
-        """Update group statistics"""
+    def update_group_member_count(self, group_id: int, member_count: int) -> bool:
+        """Update group member count"""
         try:
             last_updated = time.time()
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT OR REPLACE INTO group_statistics 
-                    (group_id, group_name, member_count, last_updated)
-                    VALUES (?, ?, ?, ?)
-                ''', (group_id, group_name, member_count, last_updated))
+                    UPDATE groups SET member_count = ?, last_updated = ?
+                    WHERE group_id = ?
+                ''', (member_count, last_updated, group_id))
                 
                 conn.commit()
-                logger.debug(f"Updated stats for group {group_name}: {member_count} members")
-                return True
                 
+                if cursor.rowcount > 0:
+                    logger.debug(f"Updated member count for group {group_id}: {member_count} members")
+                    return True
+                else:
+                    logger.warning(f"Group {group_id} not found for stats update")
+                    return False
+                    
         except sqlite3.Error as e:
-            logger.error(f"Error updating group stats: {e}")
+            logger.error(f"Error updating group member count: {e}")
             return False
     
-    def get_group_stats(self, group_id: int) -> Optional[GroupStats]:
-        """Get group statistics"""
+    def get_group_member_count(self, group_id: int) -> Optional[int]:
+        """Get group member count"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT group_id, group_name, member_count, last_updated
-                    FROM group_statistics WHERE group_id = ?
+                    SELECT member_count FROM groups WHERE group_id = ?
                 ''', (group_id,))
                 
                 result = cursor.fetchone()
-                if result:
-                    return GroupStats(*result)
-                return None
+                return result[0] if result else None
                 
         except sqlite3.Error as e:
-            logger.error(f"Error getting group stats: {e}")
+            logger.error(f"Error getting group member count: {e}")
             return None
-    
-    def get_all_group_stats(self) -> List[GroupStats]:
-        """Get all group statistics"""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT group_id, group_name, member_count, last_updated
-                    FROM group_statistics ORDER BY member_count DESC
-                ''')
-                
-                results = cursor.fetchall()
-                return [GroupStats(*row) for row in results]
-                
-        except sqlite3.Error as e:
-            logger.error(f"Error getting all group stats: {e}")
-            return []
     
     def get_overall_statistics(self) -> Dict:
         """Get overall bot statistics"""
@@ -401,16 +436,17 @@ class DatabaseManager:
                 successful_invitations_30d = cursor.fetchone()[0]
                 
                 # Total groups with stats
-                cursor.execute('SELECT COUNT(*) FROM group_statistics')
+                cursor.execute('SELECT COUNT(*) FROM groups WHERE is_active = 1')
                 total_groups = cursor.fetchone()[0]
                 
                 # Average member count
-                cursor.execute('SELECT AVG(member_count) FROM group_statistics')
+                cursor.execute('SELECT AVG(member_count) FROM groups WHERE is_active = 1 AND member_count > 0')
                 avg_members = cursor.fetchone()[0] or 0
                 
                 # Largest group
                 cursor.execute('''
-                    SELECT group_name, member_count FROM group_statistics 
+                    SELECT group_name, member_count FROM groups 
+                    WHERE is_active = 1
                     ORDER BY member_count DESC LIMIT 1
                 ''')
                 largest_group = cursor.fetchone()
@@ -460,3 +496,287 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Error cleaning up old records: {e}")
             return {"invitation_records": 0}
+    
+    # Account management methods
+    def add_account(self, session_name: str, api_id: int, api_hash: str, phone: str, 
+                   is_active: bool = True, groups_assigned: List[int] = None) -> bool:
+        """Add account to database"""
+        try:
+            import json
+            groups_json = json.dumps(groups_assigned or [])
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO accounts 
+                    (session_name, api_id, api_hash, phone, is_active, groups_assigned)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (session_name, api_id, api_hash, phone, is_active, groups_json))
+                
+                conn.commit()
+                logger.info(f"Added account {session_name} to database")
+                return True
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error adding account to database: {e}")
+            return False
+    
+    def get_account(self, session_name: str) -> Optional[AccountEntry]:
+        """Get account by session name"""
+        try:
+            import json
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT session_name, api_id, api_hash, phone, is_active, groups_assigned
+                    FROM accounts WHERE session_name = ?
+                ''', (session_name,))
+                
+                result = cursor.fetchone()
+                if result:
+                    session_name, api_id, api_hash, phone, is_active, groups_assigned_json = result
+                    groups_assigned = json.loads(groups_assigned_json)
+                    return AccountEntry(session_name, api_id, api_hash, phone, bool(is_active), groups_assigned)
+                return None
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error getting account: {e}")
+            return None
+    
+    def get_all_accounts(self) -> List[AccountEntry]:
+        """Get all accounts"""
+        try:
+            import json
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT session_name, api_id, api_hash, phone, is_active, groups_assigned
+                    FROM accounts ORDER BY session_name
+                ''')
+                
+                results = cursor.fetchall()
+                accounts = []
+                for row in results:
+                    session_name, api_id, api_hash, phone, is_active, groups_assigned_json = row
+                    groups_assigned = json.loads(groups_assigned_json)
+                    accounts.append(AccountEntry(session_name, api_id, api_hash, phone, bool(is_active), groups_assigned))
+                
+                return accounts
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error getting all accounts: {e}")
+            return []
+    
+    def update_account(self, session_name: str, **kwargs) -> bool:
+        """Update account parameters"""
+        try:
+            import json
+            
+            # Get current account data
+            account = self.get_account(session_name)
+            if not account:
+                return False
+            
+            # Update fields
+            for key, value in kwargs.items():
+                if hasattr(account, key):
+                    setattr(account, key, value)
+            
+            # Save back to database
+            groups_json = json.dumps(account.groups_assigned)
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE accounts SET api_id = ?, api_hash = ?, phone = ?, 
+                    is_active = ?, groups_assigned = ?
+                    WHERE session_name = ?
+                ''', (account.api_id, account.api_hash, account.phone, 
+                     account.is_active, groups_json, session_name))
+                
+                conn.commit()
+                logger.info(f"Updated account {session_name}")
+                return True
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error updating account: {e}")
+            return False
+    
+    def remove_account(self, session_name: str) -> bool:
+        """Remove account from database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM accounts WHERE session_name = ?', (session_name,))
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"Removed account {session_name}")
+                    return True
+                else:
+                    logger.warning(f"Account {session_name} not found")
+                    return False
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Error removing account: {e}")
+            return False
+    
+    # Group management methods
+    def add_group(self, group_id: int, group_name: str, invite_link: str, 
+                 is_active: bool = True, assigned_accounts: List[str] = None,
+                 member_count: int = 0, last_updated: float = 0.0) -> bool:
+        """Add group to database"""
+        try:
+            import json
+            accounts_json = json.dumps(assigned_accounts or [])
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO groups 
+                    (group_id, group_name, invite_link, is_active, assigned_accounts, member_count, last_updated)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (group_id, group_name, invite_link, is_active, accounts_json, member_count, last_updated))
+                
+                conn.commit()
+                logger.info(f"Added group {group_name} to database")
+                return True
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error adding group to database: {e}")
+            return False
+    
+    def get_group(self, group_id: int) -> Optional[GroupEntry]:
+        """Get group by ID"""
+        try:
+            import json
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT group_id, group_name, invite_link, is_active, assigned_accounts, member_count, last_updated
+                    FROM groups WHERE group_id = ?
+                ''', (group_id,))
+                
+                result = cursor.fetchone()
+                if result:
+                    group_id, group_name, invite_link, is_active, assigned_accounts_json, member_count, last_updated = result
+                    assigned_accounts = json.loads(assigned_accounts_json)
+                    return GroupEntry(group_id, group_name, invite_link, bool(is_active), assigned_accounts, member_count, last_updated)
+                return None
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error getting group: {e}")
+            return None
+    
+    def get_all_groups(self) -> List[GroupEntry]:
+        """Get all groups"""
+        try:
+            import json
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT group_id, group_name, invite_link, is_active, assigned_accounts, member_count, last_updated
+                    FROM groups ORDER BY group_name
+                ''')
+                
+                results = cursor.fetchall()
+                groups = []
+                for row in results:
+                    group_id, group_name, invite_link, is_active, assigned_accounts_json, member_count, last_updated = row
+                    assigned_accounts = json.loads(assigned_accounts_json)
+                    groups.append(GroupEntry(group_id, group_name, invite_link, bool(is_active), assigned_accounts, member_count, last_updated))
+                
+                return groups
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error getting all groups: {e}")
+            return []
+    
+    def update_group(self, group_id: int, **kwargs) -> bool:
+        """Update group parameters"""
+        try:
+            import json
+            
+            # Get current group data
+            group = self.get_group(group_id)
+            if not group:
+                return False
+            
+            # Update fields
+            for key, value in kwargs.items():
+                if hasattr(group, key):
+                    setattr(group, key, value)
+            
+            # Save back to database
+            accounts_json = json.dumps(group.assigned_accounts)
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE groups SET group_name = ?, invite_link = ?, 
+                    is_active = ?, assigned_accounts = ?, member_count = ?, last_updated = ?
+                    WHERE group_id = ?
+                ''', (group.group_name, group.invite_link, 
+                     group.is_active, accounts_json, group.member_count, group.last_updated, group_id))
+                
+                conn.commit()
+                logger.info(f"Updated group {group.group_name}")
+                return True
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error updating group: {e}")
+            return False
+    
+    def remove_group(self, group_id: int) -> bool:
+        """Remove group from database"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM groups WHERE group_id = ?', (group_id,))
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"Removed group with ID {group_id}")
+                    return True
+                else:
+                    logger.warning(f"Group with ID {group_id} not found")
+                    return False
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Error removing group: {e}")
+            return False
+    
+    def migrate_from_json(self, accounts_data: List[Dict], groups_data: List[Dict]) -> bool:
+        """Migrate data from JSON files to database"""
+        try:
+            # Migrate accounts
+            for account_data in accounts_data:
+                # Remove last_used field if present
+                if 'last_used' in account_data:
+                    del account_data['last_used']
+                
+                self.add_account(
+                    account_data['session_name'],
+                    account_data['api_id'],
+                    account_data['api_hash'],
+                    account_data['phone'],
+                    account_data.get('is_active', True),
+                    account_data.get('groups_assigned', [])
+                )
+            
+            # Migrate groups
+            for group_data in groups_data:
+                self.add_group(
+                    group_data['group_id'],
+                    group_data['group_name'],
+                    group_data['invite_link'],
+                    group_data.get('is_active', True),
+                    group_data.get('assigned_accounts', [])
+                )
+            
+            logger.info(f"Migrated {len(accounts_data)} accounts and {len(groups_data)} groups to database")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error migrating data: {e}")
+            return False
