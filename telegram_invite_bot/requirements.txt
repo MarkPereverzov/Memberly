@@ -1,16 +1,16 @@
-# Основные зависимости для бота-приглашающего
+# Main dependencies for the invitation bot
 pyrogram==2.0.106
 python-telegram-bot==20.7
 python-dotenv==1.0.0
 
-# Асинхронные операции
+# Asynchronous operations
 asyncio-throttle==1.0.2
 
-# Логирование и утилиты
+# Logging and utilities
 colorlog==6.7.0
 
-# Для работы с JSON и конфигурацией
+# For JSON and configuration work
 pydantic==2.5.0
 
-# Дополнительные утилиты
+# Additional utilities
 tqdm==4.66.1

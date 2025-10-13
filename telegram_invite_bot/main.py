@@ -7,7 +7,7 @@ import os
 import sys
 from typing import Dict, List
 
-# Добавляем путь к модулям
+# Add path to modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from telegram import Update
@@ -35,7 +35,7 @@ logging.basicConfig(
     ]
 )
 
-# Настройка уровней логирования для важных компонентов
+# Setup logging levels for important components
 logging.getLogger('src.account_manager').setLevel(logging.INFO)
 logging.getLogger('src.group_manager').setLevel(logging.INFO)
 logging.getLogger('src.cooldown_manager').setLevel(logging.ERROR)
@@ -43,7 +43,7 @@ logging.getLogger('src.database_manager').setLevel(logging.ERROR)
 logging.getLogger('src.group_stats_collector').setLevel(logging.ERROR)
 logging.getLogger('__main__').setLevel(logging.ERROR)
 
-# Отключение логов от внешних библиотек
+# Disable logs from external libraries
 logging.getLogger('httpx').setLevel(logging.ERROR)
 logging.getLogger('telegram').setLevel(logging.ERROR)
 logging.getLogger('pyrogram').setLevel(logging.ERROR)
@@ -139,7 +139,7 @@ Hello, {user.first_name}!
 
 This bot will help you get invitations to our groups.
 
-**📋 Basic commands:**
+**📋 Main Commands:**
 • `/invite` - Get invitations to all groups
 • `/status` - Check your status
 • `/help` - Complete command reference
@@ -278,7 +278,7 @@ To get an invitation, use the `/invite` command
         elif self._is_whitelisted(user_id):
             status_text = "✅ **You are whitelisted**"
         else:
-            status_text = "❌ **You are not whitelisted, please contact the administrator**"
+            status_text = "❌ **You are not whitelisted, contact administrator**"
         
         await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
     
@@ -290,22 +290,22 @@ To get an invitation, use the `/invite` command
         
         if self._is_admin(user_id):
             # Admin commands
-            help_text += "**📋 User commands:**\n"
+            help_text += "**📋 User Commands:**\n"
             help_text += "• `/start` - Welcome message\n"
             help_text += "• `/invite` - Get invitations to all groups\n"
             help_text += "• `/status` - Check your status\n"
             help_text += "• `/help` - This help\n\n"
             
-            help_text += "**👑 Administrator commands:**\n\n"
+            help_text += "**👑 Administrator Commands:**\n\n"
             
-            help_text += "*Group and account management:*\n"
-            help_text += "• `/groups_info` - List groups with IDs and members\n"
+            help_text += "*Group & Account Management:*\n"
+            help_text += "• `/groups_info` - List groups with ID and members\n"
             help_text += "• `/accounts_info` - List accounts with statuses\n"
             help_text += "• `/add_group (id) (name) (link)` - Add group\n"
             help_text += "• `/remove_group (id)` - Remove group\n"
             help_text += "• `/join_groups` - Join all accounts to groups\n\n"
             
-            help_text += "*User management:*\n"
+            help_text += "*User Management:*\n"
             help_text += "• `/whitelist @username (days)` - Add to whitelist\n"
             help_text += "• `/remove_whitelist @username` - Remove from whitelist\n"
             help_text += "• `/block @username [hours]` - Block user\n"
@@ -313,30 +313,30 @@ To get an invitation, use the `/invite` command
             
         elif self._is_whitelisted(user_id):
             # Whitelisted user commands
-            help_text += "**📋 Доступные команды:**\n"
-            help_text += "• `/start` - Приветственное сообщение\n"
-            help_text += "• `/invite` - Получить приглашения во все группы\n"
-            help_text += "• `/status` - Проверить свой статус\n"
-            help_text += "• `/help` - Эта справка\n\n"
+            help_text += "**📋 Available Commands:**\n"
+            help_text += "• `/start` - Welcome message\n"
+            help_text += "• `/invite` - Get invitations to all groups\n"
+            help_text += "• `/status` - Check your status\n"
+            help_text += "• `/help` - This help\n\n"
             
-            help_text += "**ℹ️ Как получить приглашение:**\n"
-            help_text += "1. Используйте команду `/invite`\n"
-            help_text += "2. Дождитесь обработки запроса\n"
-            help_text += "3. Проверьте личные сообщения\n\n"
+            help_text += "**ℹ️ How to get an invitation:**\n"
+            help_text += "1. Use the `/invite` command\n"
+            help_text += "2. Wait for request processing\n"
+            help_text += "3. Check your private messages\n\n"
             
-            help_text += "**⚠️ Ограничения:**\n"
-            help_text += "• Доступно только пользователям в whitelist\n"
-            help_text += "• Между приглашениями есть кулдаун\n"
+            help_text += "**⚠️ Limitations:**\n"
+            help_text += "• Available only to whitelisted users\n"
+            help_text += "• There is a cooldown between invitations\n"
             
         else:
             # Non-whitelisted user
-            help_text += "**❌ Доступ ограничен**\n\n"
-            help_text += "Вы не находитесь в whitelist.\n"
-            help_text += "Для получения доступа к боту обратитесь к администратору.\n\n"
-            help_text += "**📋 Доступные команды:**\n"
-            help_text += "• `/start` - Приветственное сообщение\n"
-            help_text += "• `/status` - Проверить свой статус\n"
-            help_text += "• `/help` - Эта справка\n"
+            help_text += "**❌ Access Restricted**\n\n"
+            help_text += "You are not in the whitelist.\n"
+            help_text += "To get access to the bot, contact the administrator.\n\n"
+            help_text += "**📋 Available Commands:**\n"
+            help_text += "• `/start` - Welcome message\n"
+            help_text += "• `/status` - Check your status\n"
+            help_text += "• `/help` - This help\n"
         
         await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN)
     

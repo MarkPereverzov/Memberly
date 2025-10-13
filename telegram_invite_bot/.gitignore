@@ -1,12 +1,12 @@
-# Логи бота
+# Bot logs
 *.log
 
-# Конфигурационные файлы с чувствительными данными
+# Configuration files with sensitive data
 .env
 config/accounts.json
 config/groups.json
 
-# Данные сессий
+# Session data
 data/sessions/*.session
 data/sessions/*.session-journal
 data/cooldowns.json
@@ -40,7 +40,7 @@ MANIFEST
 *.manifest
 *.spec
 
-# Виртуальные окружения
+# Virtual environments
 venv/
 env/
 ENV/

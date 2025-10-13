@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Скрипт для управления ботом-приглашающим
+Management script for the invitation bot
 """
 import os
 import sys
@@ -8,23 +8,23 @@ import asyncio
 import json
 from pathlib import Path
 
-# Добавляем путь к проекту
+# Add path to project
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 from config.config import ConfigManager
 
 def setup_project():
-    """Первоначальная настройка проекта"""
-    print("🛠 Настройка проекта...")
+    """Initial project setup"""
+    print("🛠 Setting up project...")
     
-    # Создаем необходимые директории
+    # Create necessary directories
     directories = ["logs", "data", "data/sessions", "config"]
     for directory in directories:
         os.makedirs(directory, exist_ok=True)
-        print(f"✅ Создана директория: {directory}")
+        print(f"✅ Created directory: {directory}")
     
-    # Проверяем наличие конфигурационных файлов
+    # Check for configuration files
     config_files = {
         ".env": ".env.example",
         "config/accounts.json": "config/accounts.json.example",
@@ -35,25 +35,25 @@ def setup_project():
         if not os.path.exists(target) and os.path.exists(source):
             import shutil
             shutil.copy(source, target)
-            print(f"✅ Скопирован файл конфигурации: {target}")
+            print(f"✅ Copied configuration file: {target}")
         elif not os.path.exists(target):
-            print(f"⚠️  Не найден файл: {target}")
+            print(f"⚠️  File not found: {target}")
     
-    print("\n📝 Не забудьте отредактировать конфигурационные файлы:")
-    print("   - .env (токен бота, ID пользователей)")
-    print("   - config/accounts.json (пользовательские аккаунты)")
-    print("   - config/groups.json (целевые группы)")
+    print("\n📝 Don't forget to edit configuration files:")
+    print("   - .env (bot token, user IDs)")
+    print("   - config/accounts.json (user accounts)")
+    print("   - config/groups.json (target groups)")
 
 def check_config():
-    """Проверка конфигурации"""
-    print("🔍 Проверка конфигурации...")
+    """Configuration check"""
+    print("🔍 Checking configuration...")
     
-    # Проверяем .env файл
+    # Check .env file
     if not os.path.exists(".env"):
-        print("❌ Файл .env не найден")
+        print("❌ .env file not found")
         return False
     
-    # Проверяем переменные окружения
+    # Check environment variables
     from dotenv import load_dotenv
     load_dotenv()
     
@@ -65,94 +65,94 @@ def check_config():
             missing_vars.append(var)
     
     if missing_vars:
-        print(f"❌ Отсутствуют переменные окружения: {', '.join(missing_vars)}")
+        print(f"❌ Missing environment variables: {', '.join(missing_vars)}")
         return False
     
-    # Проверяем конфигурационные файлы
+    # Check configuration files
     try:
         config_manager = ConfigManager()
         accounts = config_manager.load_accounts()
         groups = config_manager.load_groups()
         
-        print(f"✅ Загружено аккаунтов: {len(accounts)}")
-        print(f"✅ Загружено групп: {len(groups)}")
+        print(f"✅ Loaded accounts: {len(accounts)}")
+        print(f"✅ Loaded groups: {len(groups)}")
         
         if not accounts:
-            print("⚠️  Не настроено ни одного аккаунта")
+            print("⚠️  No accounts configured")
         
         if not groups:
-            print("⚠️  Не настроено ни одной группы")
+            print("⚠️  No groups configured")
         
         return True
         
     except Exception as e:
-        print(f"❌ Ошибка загрузки конфигурации: {e}")
+        print(f"❌ Configuration loading error: {e}")
         return False
 
 def add_account():
-    """Добавление нового аккаунта"""
-    print("➕ Добавление нового аккаунта...")
+    """Add new account"""
+    print("➕ Adding new account...")
     
     try:
-        session_name = input("Введите имя сессии: ").strip()
-        api_id = int(input("Введите API ID: ").strip())
-        api_hash = input("Введите API Hash: ").strip()
-        phone = input("Введите номер телефона: ").strip()
+        session_name = input("Enter session name: ").strip()
+        api_id = int(input("Enter API ID: ").strip())
+        api_hash = input("Enter API Hash: ").strip()
+        phone = input("Enter phone number: ").strip()
         
         config_manager = ConfigManager()
         account = config_manager.add_account(session_name, api_id, api_hash, phone)
         
-        print(f"✅ Аккаунт {session_name} добавлен успешно")
+        print(f"✅ Account {session_name} added successfully")
         
     except ValueError as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Error: {e}")
     except Exception as e:
-        print(f"❌ Неожиданная ошибка: {e}")
+        print(f"❌ Unexpected error: {e}")
 
 def add_group():
-    """Добавление новой группы"""
-    print("➕ Добавление новой группы...")
+    """Add new group"""
+    print("➕ Adding new group...")
     
     try:
-        group_id = int(input("Введите ID группы (например, -1001234567890): ").strip())
-        group_name = input("Введите название группы: ").strip()
-        invite_link = input("Введите ссылку-приглашение: ").strip()
+        group_id = int(input("Enter group ID (example: -1001234567890): ").strip())
+        group_name = input("Enter group name: ").strip()
+        invite_link = input("Enter invite link: ").strip()
         
         config_manager = ConfigManager()
         group = config_manager.add_group(group_id, group_name, invite_link)
         
-        print(f"✅ Группа {group_name} добавлена успешно")
+        print(f"✅ Group {group_name} added successfully")
         
     except ValueError as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Error: {e}")
     except Exception as e:
-        print(f"❌ Неожиданная ошибка: {e}")
+        print(f"❌ Unexpected error: {e}")
 
 def show_stats():
-    """Показать статистику"""
-    print("📊 Статистика конфигурации...")
+    """Show statistics"""
+    print("📊 Configuration statistics...")
     
     try:
         config_manager = ConfigManager()
         accounts = config_manager.load_accounts()
         groups = config_manager.load_groups()
         
-        print(f"\n📱 Аккаунты ({len(accounts)}):")
+        print(f"\n📱 Accounts ({len(accounts)}):")
         for account in accounts:
             status = "✅" if account.is_active else "❌"
             print(f"  {status} {account.session_name} ({account.phone})")
         
-        print(f"\n🏢 Группы ({len(groups)}):")
+        print(f"\n🏢 Groups ({len(groups)}):")
         for group in groups:
             status = "✅" if group.is_active else "❌"
             print(f"  {status} {group.group_name} (ID: {group.group_id})")
         
     except Exception as e:
-        print(f"❌ Ошибка: {e}")
+        print(f"❌ Error: {e}")
 
 async def test_accounts():
-    """Тестирование подключения аккаунтов"""
-    print("🧪 Тестирование аккаунтов...")
+    """Test account connections"""
+    print("🧪 Testing accounts...")
     
     try:
         from src.account_manager import AccountManager
@@ -162,42 +162,42 @@ async def test_accounts():
         
         await account_manager.initialize()
         
-        print("✅ Все аккаунты протестированы")
+        print("✅ All accounts tested")
         
         await account_manager.shutdown()
         
     except Exception as e:
-        print(f"❌ Ошибка тестирования: {e}")
+        print(f"❌ Testing error: {e}")
 
 def run_bot():
-    """Запуск бота"""
-    print("🚀 Запуск бота...")
+    """Start bot"""
+    print("🚀 Starting bot...")
     
-    # Проверяем конфигурацию перед запуском
+    # Check configuration before starting
     if not check_config():
-        print("❌ Конфигурация некорректна. Исправьте ошибки и попробуйте снова.")
+        print("❌ Configuration is incorrect. Fix errors and try again.")
         return
     
-    # Запускаем основной скрипт
+    # Start main script
     os.system("python main.py")
 
 def main():
-    """Главное меню"""
+    """Main menu"""
     while True:
         print("\n" + "="*50)
-        print("🤖 Telegram Invite Bot - Управление")
+        print("🤖 Telegram Invite Bot - Management")
         print("="*50)
-        print("1. 🛠  Первоначальная настройка")
-        print("2. 🔍 Проверить конфигурацию")
-        print("3. ➕ Добавить аккаунт")
-        print("4. ➕ Добавить группу")
-        print("5. 📊 Показать статистику")
-        print("6. 🧪 Тестировать аккаунты")
-        print("7. 🚀 Запустить бота")
-        print("8. 🚪 Выход")
+        print("1. 🛠  Initial setup")
+        print("2. 🔍 Check configuration")
+        print("3. ➕ Add account")
+        print("4. ➕ Add group")
+        print("5. 📊 Show statistics")
+        print("6. 🧪 Test accounts")
+        print("7. 🚀 Start bot")
+        print("8. 🚪 Exit")
         print("="*50)
         
-        choice = input("Выберите действие (1-8): ").strip()
+        choice = input("Choose action (1-8): ").strip()
         
         if choice == "1":
             setup_project()
@@ -214,12 +214,12 @@ def main():
         elif choice == "7":
             run_bot()
         elif choice == "8":
-            print("👋 До свидания!")
+            print("👋 Goodbye!")
             break
         else:
-            print("❌ Неверный выбор. Попробуйте снова.")
+            print("❌ Invalid choice. Try again.")
         
-        input("\nНажмите Enter для продолжения...")
+        input("\nPress Enter to continue...")
 
 if __name__ == "__main__":
     main()

@@ -173,10 +173,10 @@ The bot now features a database-driven whitelist system:
 - Temporary deactivation of problematic accounts
 - Account activity monitoring
 
-### Контроль доступа
-- Белый список пользователей
-- Роли администраторов
-- Блокировка спамеров
+### Access Control
+- User whitelist
+- Administrator roles
+- Spammer blocking
 
 ## 📁 Project Structure
 
@@ -238,15 +238,15 @@ telegram_invite_bot/
 - Automated cleanup of old records
 
 ### Logs
-Все события записываются в `logs/bot.log`:
-- Успешные/неудачные приглашения
-- Ошибки аккаунтов
-- Активность пользователей
+All events are recorded in `logs/bot.log`:
+- Successful/failed invitations
+- Account errors
+- User activity
 
-### Статистика
-Доступна через админ-панель (`/admin` → Statistics):
-- Количество активных аккаунтов
-- Статистика приглашений
+### Statistics
+Available through admin panel (`/admin` → Statistics):
+- Number of active accounts
+- Invitation statistics
 - Blocked users
 
 ### Statistics Access
@@ -291,8 +291,8 @@ When experiencing issues:
 2. Verify configuration files
 3. Test with `/force_stats` command
 4. Check database integrity
-3. Проверьте статус аккаунтов через `/admin`
+3. Check account status via `/admin`
 
-## 📄 Лицензия
+## 📄 License
 
-Этот проект предназначен для образовательных целей. Убедитесь, что ваше использование соответствует условиям использования Telegram.
+This project is intended for educational purposes. Make sure your usage complies with Telegram's Terms of Service.
