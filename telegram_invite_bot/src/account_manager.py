@@ -287,6 +287,51 @@ class AccountManager:
             ]
         }
     
+    async def get_detailed_account_stats(self) -> Dict:
+        """Get detailed account statistics with user IDs and connection status"""
+        detailed_accounts = []
+        
+        for acc in self.accounts:
+            account_info = {
+                "session_name": acc.session_name,
+                "phone": acc.phone,
+                "is_active": acc.is_active,
+                "is_connected": False,
+                "user_id": "Unknown",
+                "username": "Unknown",
+                "first_name": "Unknown"
+            }
+            
+            # Try to get detailed info if client exists and account is active
+            if acc.is_active:
+                client = self.clients.get(acc.session_name)
+                if client:
+                    try:
+                        me = await client.get_me()
+                        account_info.update({
+                            "is_connected": True,
+                            "user_id": me.id,
+                            "username": me.username or "No username",
+                            "first_name": me.first_name or "Unknown"
+                        })
+                        logger.debug(f"Got detailed info for {acc.session_name}: {me.id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to get detailed info for {acc.session_name}: {e}")
+                        account_info["is_connected"] = False
+            
+            detailed_accounts.append(account_info)
+        
+        total_accounts = len(self.accounts)
+        active_accounts = len([acc for acc in detailed_accounts if acc.get('is_active', False)])
+        connected_accounts = len([acc for acc in detailed_accounts if acc.get('is_connected', False)])
+        
+        return {
+            "total_accounts": total_accounts,
+            "active_accounts": active_accounts,
+            "connected_accounts": connected_accounts,
+            "accounts_details": detailed_accounts
+        }
+    
     async def test_account_connection(self, session_name: str) -> bool:
         """Test account connection"""
         client = self.clients.get(session_name)

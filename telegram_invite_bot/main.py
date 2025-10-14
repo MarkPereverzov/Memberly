@@ -132,8 +132,21 @@ class InviteBot:
         """Check if user is whitelisted"""
         return self.whitelist_manager.is_user_whitelisted(user_id)
     
+    def _update_user_info(self, user) -> None:
+        """Update user information in database"""
+        if user:
+            self.database_manager.update_user_info(
+                user_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name
+            )
+    
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /start command"""
+        # Update user info in database
+        self._update_user_info(update.effective_user)
+        
         user = update.effective_user
         
         welcome_text = f"""
@@ -285,6 +298,9 @@ To get an invitation, use the `/invite` command
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /status command"""
+        # Update user info in database
+        self._update_user_info(update.effective_user)
+        
         user_id = update.effective_user.id
         
         # Check access level
@@ -411,57 +427,66 @@ To get an invitation, use the `/invite` command
             await update.message.reply_text("❌ This command is only available to administrators.")
             return
         
-        await update.message.reply_text("🔄 Starting automatic group joining process...")
+        # Send initial message
+        status_message = await update.message.reply_text("🔄 Starting automatic group joining process...")
         
         try:
             # Get all active groups
             active_groups = self.group_manager.get_active_groups()
             
             if not active_groups:
-                await update.message.reply_text("❌ No active groups found.")
+                await status_message.edit_text("❌ No active groups found.")
                 return
             
             # Start auto-join process
             results = await self.account_manager.auto_join_all_groups(active_groups)
             
-            # Format results message
-            response_lines = ["✅ Auto-join process completed!\n"]
+            # Format results message in the new style
+            response_lines = ["🔄 Auto-join (Updated)\n"]
             
-            total_success = 0
-            total_failed = 0
+            total_success_groups = 0
+            total_failed_groups = 0
             
+            # Process each group
             for group_name, group_results in results.items():
                 success_count = len(group_results["success"])
                 failed_count = len(group_results["failed"])
                 
-                total_success += success_count
-                total_failed += failed_count
+                # Find group ID
+                group_id = "Unknown"
+                for group in active_groups:
+                    if group.group_name == group_name:
+                        group_id = group.group_id
+                        break
                 
-                response_lines.append(f"📋 {group_name}")
-                response_lines.append(f"  ✅ Joined: {success_count}")
-                response_lines.append(f"  ❌ Failed: {failed_count}")
+                # Determine group status - success if at least one account joined
+                if success_count > 0:
+                    status_icon = "✅"
+                    total_success_groups += 1
+                else:
+                    status_icon = "❌"
+                    total_failed_groups += 1
                 
-                if group_results["failed"]:
-                    response_lines.append(f"  Failed accounts: {', '.join(group_results['failed'][:3])}")
-                    if len(group_results["failed"]) > 3:
-                        response_lines.append(f"  ...and {len(group_results['failed']) - 3} more")
-                
-                response_lines.append("")
+                response_lines.append(f"{status_icon} {group_name} (ID: {group_id})")
             
-            response_lines.append(f"📊 Total Summary:")
-            response_lines.append(f"✅ Total Successful: {total_success}")
-            response_lines.append(f"❌ Total Failed: {total_failed}")
+            # Add summary
+            response_lines.append("")
+            response_lines.append("� Update Summary:")
+            response_lines.append(f"• ✅ Successfully: {total_success_groups} groups")
+            response_lines.append(f"• ❌ Failed: {total_failed_groups} groups")
+            response_lines.append(f"• 📊 Total: {len(active_groups)} groups")
             
             response_text = "\n".join(response_lines)
             
-            # Split message if too long
-            if len(response_text) > 4000:
-                response_text = response_text[:4000] + "...\n\n📊 Check logs for full details."
-            
-            await update.message.reply_text(response_text)
+            # Update the message
+            await status_message.edit_text(response_text)
             
         except Exception as e:
-            await update.message.reply_text(f"❌ Error during auto-join process: {str(e)}")
+            error_text = f"❌ Error during auto-join process: {str(e)}"
+            try:
+                await status_message.edit_text(error_text)
+            except:
+                await update.message.reply_text(error_text)
     
     async def whitelist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /whitelist command"""
@@ -487,9 +512,16 @@ To get an invitation, use the `/invite` command
                 await update.message.reply_text("❌ Days must be a positive number.")
                 return
             
-            # For now, we'll use a placeholder user_id (0) since we're working with usernames
-            # In a real implementation, you'd want to resolve the username to a user_id
-            user_id = 0  # Placeholder - you may need to implement username resolution
+            # Try to get user_id from database first (if user has interacted with bot before)
+            user_id = self.database_manager.get_user_id_by_username(username)
+            
+            if user_id is None:
+                await update.message.reply_text(
+                    f"⚠️ Cannot find user ID for @{username}. "
+                    f"The user needs to start the bot first by sending /start command. "
+                    f"After that, you can add them to whitelist."
+                )
+                return
             
             success = self.whitelist_manager.add_to_whitelist(
                 user_id, days, update.effective_user.id, f"@{username}"
@@ -497,7 +529,7 @@ To get an invitation, use the `/invite` command
             
             if success:
                 await update.message.reply_text(
-                    f"✅ User @{username} added to whitelist for {days} days."
+                    f"✅ User @{username} (ID: {user_id}) added to whitelist for {days} days."
                 )
                 
                 # Record in database
@@ -525,16 +557,22 @@ To get an invitation, use the `/invite` command
         # Remove @ if present
         username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
         
-        # For now, we'll use a placeholder user_id (0) since we're working with usernames
-        # In a real implementation, you'd want to resolve the username to a user_id
-        user_id = 0  # Placeholder - you may need to implement username resolution
+        # Try to get user_id from database
+        user_id = self.database_manager.get_user_id_by_username(username)
+        
+        if user_id is None:
+            await update.message.reply_text(
+                f"⚠️ Cannot find user ID for @{username}. "
+                f"User may not have interacted with the bot or was never whitelisted."
+            )
+            return
         
         success = self.whitelist_manager.remove_from_whitelist(user_id)
         
         if success:
-            await update.message.reply_text(f"✅ User @{username} removed from whitelist.")
+            await update.message.reply_text(f"✅ User @{username} (ID: {user_id}) removed from whitelist.")
         else:
-            await update.message.reply_text(f"❌ User @{username} not found in whitelist.")
+            await update.message.reply_text(f"❌ User @{username} (ID: {user_id}) not found in whitelist.")
     
     async def add_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /add_group command"""
@@ -679,33 +717,42 @@ To get an invitation, use the `/invite` command
             await update.message.reply_text("❌ This command is only available to administrators.")
             return
         
-        # Get account statistics
-        account_stats = self.account_manager.get_account_stats()
+        # Get account statistics with detailed info
+        account_stats = await self.account_manager.get_detailed_account_stats()
         
-        text = "� **Accounts Information**\n\n"
+        # Build response according to the new format
+        response_lines = ["🔄 Accounts Information (Updated)\n"]
+        
+        successful_accounts = 0
+        failed_accounts = 0
         
         if account_stats['accounts_details']:
             for account in account_stats['accounts_details']:
-                status = "✅" if account.get('is_active', False) else "❌"
-                text += f"{status} **{account['session_name']}**\n"
+                account_name = account['session_name']
+                account_id = account.get('user_id', 'Unknown')
                 
-                # Show phone if available
-                if 'phone' in account:
-                    text += f"   📱 Phone: {account['phone']}\n"
-                
-                # Show connection status
-                if account.get('is_connected', False):
-                    username = account.get('username', 'Unknown')
-                    first_name = account.get('first_name', 'Unknown')
-                    text += f"   🔗 Connected: {first_name} (@{username})\n"
+                if account.get('is_active', False) and account.get('is_connected', False):
+                    status_icon = "✅"
+                    successful_accounts += 1
                 else:
-                    text += f"   ❌ Not connected\n"
+                    status_icon = "❌"
+                    failed_accounts += 1
                 
-                text += "\n"
+                response_lines.append(f"{status_icon} {account_name} (ID: {account_id})")
         else:
-            text += "No accounts found."
+            response_lines.append("❌ No accounts found")
+            failed_accounts = 1
         
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        # Add summary
+        total_accounts = successful_accounts + failed_accounts
+        response_lines.append("")
+        response_lines.append("📈 Update Summary:")
+        response_lines.append(f"• ✅ Successfully: {successful_accounts} accounts")
+        response_lines.append(f"• ❌ Failed: {failed_accounts} accounts")
+        response_lines.append(f"• 📊 Total: {total_accounts}")
+        
+        response_text = "\n".join(response_lines)
+        await update.message.reply_text(response_text)
     
     async def blacklist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /blacklist command"""

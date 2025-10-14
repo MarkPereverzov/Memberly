@@ -175,6 +175,18 @@ class DatabaseManager:
                     )
                 ''')
                 
+                # Create users table for tracking user information
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id INTEGER PRIMARY KEY,
+                        username TEXT UNIQUE,
+                        first_name TEXT,
+                        last_name TEXT,
+                        last_interaction REAL NOT NULL,
+                        created_date REAL NOT NULL
+                    )
+                ''')
+                
                 # Create indexes for better performance
                 cursor.execute('''
                     CREATE INDEX IF NOT EXISTS idx_whitelist_expiration 
@@ -194,6 +206,11 @@ class DatabaseManager:
                 cursor.execute('''
                     CREATE INDEX IF NOT EXISTS idx_invitation_group_date 
                     ON invitation_records(group_id, invitation_date)
+                ''')
+                
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_users_username 
+                    ON users(username)
                 ''')
                 
                 conn.commit()
@@ -967,3 +984,90 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error migrating data: {e}")
             return False
+    
+    def update_user_info(self, user_id: int, username: str = None, 
+                        first_name: str = None, last_name: str = None) -> bool:
+        """Update or insert user information"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Check if user exists
+                cursor.execute('SELECT user_id FROM users WHERE user_id = ?', (user_id,))
+                exists = cursor.fetchone() is not None
+                
+                current_time = time.time()
+                
+                if exists:
+                    # Update existing user
+                    cursor.execute('''
+                        UPDATE users 
+                        SET username = COALESCE(?, username),
+                            first_name = COALESCE(?, first_name),
+                            last_name = COALESCE(?, last_name),
+                            last_interaction = ?
+                        WHERE user_id = ?
+                    ''', (username, first_name, last_name, current_time, user_id))
+                else:
+                    # Insert new user
+                    cursor.execute('''
+                        INSERT INTO users (user_id, username, first_name, last_name, 
+                                         last_interaction, created_date)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', (user_id, username, first_name, last_name, current_time, current_time))
+                
+                conn.commit()
+                logger.debug(f"Updated user info: {user_id} (@{username})")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Error updating user info: {e}")
+            return False
+    
+    def get_user_id_by_username(self, username: str) -> Optional[int]:
+        """Get user_id by username"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Remove @ if present
+                clean_username = username.replace('@', '') if username.startswith('@') else username
+                
+                cursor.execute('SELECT user_id FROM users WHERE username = ?', (clean_username,))
+                result = cursor.fetchone()
+                
+                if result:
+                    return result[0]
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting user_id for username {username}: {e}")
+            return None
+    
+    def get_user_info(self, user_id: int) -> Optional[Dict]:
+        """Get user information by user_id"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    SELECT user_id, username, first_name, last_name, 
+                           last_interaction, created_date
+                    FROM users WHERE user_id = ?
+                ''', (user_id,))
+                
+                result = cursor.fetchone()
+                if result:
+                    return {
+                        'user_id': result[0],
+                        'username': result[1],
+                        'first_name': result[2],
+                        'last_name': result[3],
+                        'last_interaction': result[4],
+                        'created_date': result[5]
+                    }
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error getting user info for {user_id}: {e}")
+            return None
