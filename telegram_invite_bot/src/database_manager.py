@@ -23,6 +23,16 @@ class WhitelistEntry:
     is_active: bool = True
 
 @dataclass
+class BlacklistEntry:
+    """Blacklist entry data"""
+    user_id: int
+    username: Optional[str]
+    reason: str
+    added_by: int
+    added_date: float
+    is_active: bool = True
+
+@dataclass
 class InvitationRecord:
     """Invitation record data"""
     id: Optional[int]
@@ -48,6 +58,7 @@ class AccountEntry:
             self.groups_assigned = []
 
 @dataclass
+@dataclass
 class GroupEntry:
     """Group entry data"""
     group_id: int
@@ -65,7 +76,13 @@ class GroupEntry:
 class DatabaseManager:
     """Database manager for persistent storage"""
     
-    def __init__(self, db_path: str = "data/bot_database.db"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            # Default to project root data directory
+            script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            data_dir = os.path.join(script_dir, '..', 'data')
+            db_path = os.path.join(data_dir, "bot_database.db")
+        
         self.db_path = db_path
         self.ensure_db_directory()
         self.init_database()
@@ -88,6 +105,18 @@ class DatabaseManager:
                         user_id INTEGER PRIMARY KEY,
                         username TEXT,
                         expiration_date REAL NOT NULL,
+                        added_by INTEGER NOT NULL,
+                        added_date REAL NOT NULL,
+                        is_active BOOLEAN DEFAULT 1
+                    )
+                ''')
+                
+                # Create blacklist table
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS blacklist (
+                        user_id INTEGER PRIMARY KEY,
+                        username TEXT,
+                        reason TEXT NOT NULL,
                         added_by INTEGER NOT NULL,
                         added_date REAL NOT NULL,
                         is_active BOOLEAN DEFAULT 1
@@ -150,6 +179,11 @@ class DatabaseManager:
                 cursor.execute('''
                     CREATE INDEX IF NOT EXISTS idx_whitelist_expiration 
                     ON whitelist(expiration_date)
+                ''')
+                
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_blacklist_user 
+                    ON blacklist(user_id)
                 ''')
                 
                 cursor.execute('''
@@ -287,6 +321,143 @@ class DatabaseManager:
             logger.error(f"Error cleaning up expired whitelist: {e}")
             return 0
     
+    # Blacklist management methods
+    def add_to_blacklist(self, user_id: int, reason: str, added_by: int, 
+                        username: Optional[str] = None) -> bool:
+        """Add user to blacklist"""
+        try:
+            added_date = time.time()
+            
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO blacklist 
+                    (user_id, username, reason, added_by, added_date, is_active)
+                    VALUES (?, ?, ?, ?, ?, 1)
+                ''', (user_id, username, reason, added_by, added_date))
+                
+                conn.commit()
+                logger.info(f"Added user {user_id} to blacklist. Reason: {reason}")
+                return True
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error adding user to blacklist: {e}")
+            return False
+    
+    def remove_from_blacklist(self, user_id: int) -> bool:
+        """Remove user from blacklist"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM blacklist WHERE user_id = ?', (user_id,))
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"Removed user {user_id} from blacklist")
+                    return True
+                else:
+                    logger.warning(f"User {user_id} not found in blacklist")
+                    return False
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Error removing user from blacklist: {e}")
+            return False
+    
+    def is_user_blacklisted(self, user_id: int) -> bool:
+        """Check if user is blacklisted"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT user_id FROM blacklist 
+                    WHERE user_id = ? AND is_active = 1
+                ''', (user_id,))
+                
+                result = cursor.fetchone()
+                return result is not None
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error checking blacklist status: {e}")
+            return False
+    
+    def get_blacklist_entry(self, user_id: int) -> Optional[BlacklistEntry]:
+        """Get blacklist entry for user"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT user_id, username, reason, added_by, added_date, is_active
+                    FROM blacklist WHERE user_id = ?
+                ''', (user_id,))
+                
+                result = cursor.fetchone()
+                if result:
+                    return BlacklistEntry(*result)
+                return None
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error getting blacklist entry: {e}")
+            return None
+    
+    def get_all_blacklisted_users(self) -> List[BlacklistEntry]:
+        """Get all blacklisted users"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT user_id, username, reason, added_by, added_date, is_active
+                    FROM blacklist ORDER BY added_date DESC
+                ''')
+                
+                results = cursor.fetchall()
+                return [BlacklistEntry(*row) for row in results]
+                
+        except sqlite3.Error as e:
+            logger.error(f"Error getting blacklisted users: {e}")
+            return []
+    
+    def update_blacklist_entry(self, user_id: int, reason: Optional[str] = None, 
+                              is_active: Optional[bool] = None) -> bool:
+        """Update blacklist entry"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Build update query based on provided parameters
+                updates = []
+                params = []
+                
+                if reason is not None:
+                    updates.append("reason = ?")
+                    params.append(reason)
+                
+                if is_active is not None:
+                    updates.append("is_active = ?")
+                    params.append(is_active)
+                
+                if not updates:
+                    return False
+                
+                params.append(user_id)
+                
+                cursor.execute(f'''
+                    UPDATE blacklist SET {', '.join(updates)}
+                    WHERE user_id = ?
+                ''', params)
+                
+                conn.commit()
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"Updated blacklist entry for user {user_id}")
+                    return True
+                else:
+                    logger.warning(f"User {user_id} not found in blacklist")
+                    return False
+                    
+        except sqlite3.Error as e:
+            logger.error(f"Error updating blacklist entry: {e}")
+            return False
+    
     # Invitation records methods
     def record_invitation(self, user_id: int, group_id: int, group_name: str, 
                          success: bool, error_message: Optional[str] = None) -> bool:
@@ -420,6 +591,13 @@ class DatabaseManager:
                 ''', (current_time,))
                 active_whitelist = cursor.fetchone()[0]
                 
+                # Active blacklisted users
+                cursor.execute('''
+                    SELECT COUNT(*) FROM blacklist 
+                    WHERE is_active = 1
+                ''')
+                active_blacklist = cursor.fetchone()[0]
+                
                 # Total invitations (last 30 days)
                 cutoff_time = time.time() - (30 * 24 * 60 * 60)
                 cursor.execute('''
@@ -455,6 +633,7 @@ class DatabaseManager:
                 
                 return {
                     "active_whitelist_users": active_whitelist,
+                    "active_blacklist_users": active_blacklist,
                     "total_invitations_30d": total_invitations_30d,
                     "successful_invitations_30d": successful_invitations_30d,
                     "success_rate_30d": round(success_rate, 2),
@@ -728,15 +907,23 @@ class DatabaseManager:
             return False
     
     def remove_group(self, group_id: int) -> bool:
-        """Remove group from database"""
+        """Remove group from database and all related records"""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                
+                # Remove group from groups table
                 cursor.execute('DELETE FROM groups WHERE group_id = ?', (group_id,))
+                group_deleted = cursor.rowcount > 0
+                
+                # Remove related invitation records
+                cursor.execute('DELETE FROM invitation_records WHERE group_id = ?', (group_id,))
+                invitations_deleted = cursor.rowcount
+                
                 conn.commit()
                 
-                if cursor.rowcount > 0:
-                    logger.info(f"Removed group with ID {group_id}")
+                if group_deleted:
+                    logger.info(f"Removed group with ID {group_id} and {invitations_deleted} related invitation records")
                     return True
                 else:
                     logger.warning(f"Group with ID {group_id} not found")

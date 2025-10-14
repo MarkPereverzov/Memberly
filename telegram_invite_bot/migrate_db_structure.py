@@ -17,13 +17,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def migrate_database_structure(db_path: str = "data/bot_database.db") -> bool:
+def migrate_database_structure(db_path: str = None) -> bool:
     """
     Migrate database structure:
     1. Add member_count and last_updated columns to groups table
     2. Copy data from group_statistics to groups table
     3. Drop group_statistics table
     """
+    if db_path is None:
+        # Use project root data directory
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(script_dir, '..', 'data')
+        db_path = os.path.join(data_dir, "bot_database.db")
     
     if not os.path.exists(db_path):
         logger.error(f"Database file not found: {db_path}")

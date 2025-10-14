@@ -48,8 +48,19 @@ class AccountManager:
                 workdir=self.session_dir
             )
             
-            # Connect to account
-            await client.start()
+            # Connect to account with retry logic for database locks
+            max_retries = 3
+            for retry in range(max_retries):
+                try:
+                    await client.start()
+                    break
+                except Exception as e:
+                    if "database is locked" in str(e).lower() and retry < max_retries - 1:
+                        logger.warning(f"Database locked for {account.session_name}, retrying in {retry + 1} seconds...")
+                        await asyncio.sleep(retry + 1)
+                        continue
+                    else:
+                        raise e
             
             # Check that account is active
             me = await client.get_me()
@@ -162,6 +173,89 @@ class AccountManager:
             logger.error(f"Error getting link for group {group_id}: {e}")
             return None
     
+    async def get_group_member_count(self, group_id: int, invite_link: str = None) -> Optional[int]:
+        """Get member count for group using any available account"""
+        active_accounts = [acc for acc in self.accounts if acc.is_active]
+        available_clients = [(acc, self.clients.get(acc.session_name)) for acc in active_accounts if self.clients.get(acc.session_name)]
+        
+        if not available_clients:
+            logger.error(f"No available clients to get member count for group {group_id}")
+            return None
+            
+        logger.info(f"Attempting to get member count for group {group_id} using {len(available_clients)} available clients")
+        
+        for account, client in available_clients:
+            try:
+                logger.debug(f"Trying to get group info via {account.session_name}")
+                
+                # Try to get chat by invite link first if available
+                chat = None
+                if invite_link:
+                    try:
+                        # Extract chat identifier from invite link
+                        if "t.me/+" in invite_link:
+                            # Private group invite link - try to join first
+                            logger.debug(f"Using private invite link: {invite_link}")
+                            try:
+                                chat = await client.get_chat(invite_link)
+                            except Exception as link_error:
+                                logger.warning(f"Could not access group via invite link {invite_link}: {link_error}")
+                                # Try to join via invite link
+                                try:
+                                    chat = await client.join_chat(invite_link)
+                                    logger.info(f"Joined group via invite link: {invite_link}")
+                                except Exception as join_error:
+                                    logger.warning(f"Could not join group via invite link {invite_link}: {join_error}")
+                        else:
+                            # Public group - try username
+                            username = invite_link.split('/')[-1]
+                            chat = await client.get_chat(username)
+                    except Exception as e:
+                        logger.debug(f"Could not get chat via invite link: {e}")
+                
+                # If invite link didn't work, try direct ID
+                if not chat:
+                    try:
+                        chat = await client.get_chat(group_id)
+                    except Exception as id_error:
+                        logger.debug(f"Could not get chat via ID {group_id}: {id_error}")
+                        continue
+                
+                # Check if we got valid chat info
+                if chat and hasattr(chat, 'members_count') and chat.members_count is not None:
+                    logger.info(f"Group {group_id} has {chat.members_count} members (via {account.session_name})")
+                    return chat.members_count
+                elif chat:
+                    logger.warning(f"Chat {group_id}: members_count not available. Chat type: {getattr(chat, 'type', 'unknown')}")
+                    
+                    # Try to check if we're a member of this chat
+                    try:
+                        me = await client.get_me()
+                        member = await client.get_chat_member(chat.id, me.id)
+                        logger.info(f"Account {account.session_name} status in group {chat.id}: {member.status}")
+                        
+                        # If we're not a member, we can't get member count
+                        if member.status not in ["member", "administrator", "creator"]:
+                            logger.warning(f"Account {account.session_name} is not a member of group {chat.id}")
+                        
+                    except Exception as member_error:
+                        logger.warning(f"Could not check membership status for group {group_id}: {member_error}")
+                    
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "chat not found" in error_msg:
+                    logger.error(f"Group {group_id} not found or not accessible via {account.session_name}")
+                elif "forbidden" in error_msg:
+                    logger.error(f"Access forbidden to group {group_id} via {account.session_name}")
+                elif "peer id invalid" in error_msg:
+                    logger.error(f"Invalid peer ID {group_id} - group may not be accessible via {account.session_name}")
+                else:
+                    logger.debug(f"Failed to get member count for group {group_id} via {account.session_name}: {e}")
+                continue
+        
+        logger.warning(f"Could not get member count for group {group_id} with any account")
+        return None
+    
 
     
     async def shutdown(self):
@@ -226,29 +320,38 @@ class AccountManager:
             "failed": []
         }
         
+        # Check if we have any active accounts
+        active_accounts = [acc for acc in self.accounts if acc.is_active]
+        if not active_accounts:
+            logger.error("No active accounts available for group joining")
+            return results
+        
+        logger.info(f"Attempting to join group {group_name} with {len(active_accounts)} active accounts")
+        
         # Extract invite hash or username from link
         invite_hash = None
         username = None
         
         if "t.me/+" in group_invite_link:
             invite_hash = group_invite_link.split("t.me/+")[-1]
+            logger.debug(f"Using invite hash: {invite_hash[:10]}...")
         elif "t.me/" in group_invite_link:
             username = group_invite_link.split("t.me/")[-1]
             if username.startswith("@"):
                 username = username[1:]
+            logger.debug(f"Using username: {username}")
         else:
             logger.error(f"Invalid invite link format: {group_invite_link}")
             return results
         
-        for account in self.accounts:
-            if not account.is_active:
-                continue
-                
+        for account in active_accounts:
             client = self.clients.get(account.session_name)
             if not client:
                 logger.warning(f"Client not available for account {account.session_name}")
                 results["failed"].append(account.session_name)
                 continue
+            
+            logger.info(f"Attempting to join {group_name} with account {account.session_name}")
             
             try:
                 if invite_hash:

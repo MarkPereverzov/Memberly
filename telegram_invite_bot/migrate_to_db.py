@@ -67,8 +67,10 @@ def migrate_to_database(accounts_data, groups_data):
     print("🔄 Migrating data to database...")
     
     try:
-        # Initialize database manager
-        db_path = "data/bot_database.db"
+        # Initialize database manager - use project root data directory
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(script_dir, '..', 'data')
+        db_path = os.path.join(data_dir, "bot_database.db")
         db_manager = DatabaseManager(db_path)
         
         # Migrate data
@@ -90,7 +92,10 @@ def verify_migration():
     print("🔍 Verifying migration...")
     
     try:
-        db_path = "data/bot_database.db"
+        # Use project root data directory
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(script_dir, '..', 'data')
+        db_path = os.path.join(data_dir, "bot_database.db")
         db_manager = DatabaseManager(db_path)
         
         # Check accounts

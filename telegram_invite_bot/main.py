@@ -5,6 +5,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 from typing import Dict, List
 
 # Add path to modules
@@ -20,6 +21,7 @@ from src.group_manager import GroupManager
 from src.cooldown_manager import CooldownManager
 from src.database_manager import DatabaseManager
 from src.whitelist_manager import WhitelistManager
+from src.blacklist_manager import BlacklistManager
 from src.group_stats_collector import GroupStatsCollector
 
 # Setup logging
@@ -71,6 +73,7 @@ class InviteBot:
             self.database_manager, 
             self.config_manager.bot_config.admin_user_ids
         )
+        self.blacklist_manager = BlacklistManager(self.database_manager)
         
         # Initialize group statistics collector
         self.group_stats_collector = GroupStatsCollector(
@@ -117,8 +120,9 @@ class InviteBot:
         # Admin commands - User Management
         self.application.add_handler(CommandHandler("whitelist", self.whitelist_command))
         self.application.add_handler(CommandHandler("remove_whitelist", self.remove_whitelist_command))
-        self.application.add_handler(CommandHandler("block", self.block_user_command))
-        self.application.add_handler(CommandHandler("unblock", self.unblock_user_command))
+        self.application.add_handler(CommandHandler("blacklist", self.blacklist_command))
+        self.application.add_handler(CommandHandler("unblacklist", self.unblacklist_command))
+        self.application.add_handler(CommandHandler("blacklist_info", self.blacklist_info_command))
     
     def _is_admin(self, user_id: int) -> bool:
         """Check if user is an administrator"""
@@ -156,6 +160,17 @@ To get an invitation, use the `/invite` command
         """Handler for /invite command - invites user to ALL groups sequentially"""
         user = update.effective_user
         user_id = user.id
+        
+        # Check if user is blacklisted first
+        if self.blacklist_manager.is_user_blocked(user_id):
+            blacklist_entry = self.blacklist_manager.get_user_info(user_id)
+            reason = blacklist_entry.reason if blacklist_entry else "No reason specified"
+            await update.message.reply_text(
+                f"🚫 You are blocked from using this bot.\n"
+                f"**Reason:** {reason}\n\n"
+                f"Contact an administrator if you believe this is an error."
+            )
+            return
         
         # Check if user is whitelisted
         if not self._is_whitelisted(user_id):
@@ -308,8 +323,9 @@ To get an invitation, use the `/invite` command
             help_text += "*User Management:*\n"
             help_text += "• `/whitelist @username (days)` - Add to whitelist\n"
             help_text += "• `/remove_whitelist @username` - Remove from whitelist\n"
-            help_text += "• `/block @username [hours]` - Block user\n"
-            help_text += "• `/unblock @username` - Unblock user\n"
+            help_text += "• `/blacklist (user_id) (reason)` - Add to blacklist\n"
+            help_text += "• `/unblacklist (user_id)` - Remove from blacklist\n"
+            help_text += "• `/blacklist_info [user_id]` - Show blacklist info\n"
             
         elif self._is_whitelisted(user_id):
             # Whitelisted user commands
@@ -542,15 +558,52 @@ To get an invitation, use the `/invite` command
                 await update.message.reply_text("❌ Invalid invite link. Must start with https://t.me/")
                 return
             
-            success = self.group_manager.add_group(group_id, group_name, invite_link)
+            # Send initial message
+            status_message = await update.message.reply_text(f"📋 Adding group '{group_name}'...")
             
-            if success:
-                await update.message.reply_text(f"✅ Group '{group_name}' added successfully.")
+            # Use new async method with auto-join
+            result = await self.group_manager.add_group_with_auto_join(
+                group_id, group_name, invite_link, self.account_manager
+            )
+            
+            if result["success"]:
+                # Prepare detailed response
+                join_results = result.get("join_results", {})
+                member_count = result.get("member_count")
+                
+                response_text = f"✅ Group '{group_name}' added successfully!\n\n"
+                
+                # Add join results
+                if join_results:
+                    successful_joins = join_results.get("success", [])
+                    failed_joins = join_results.get("failed", [])
+                    
+                    response_text += f"📊 Account Join Results:\n"
+                    response_text += f"• ✅ Successfully joined: {len(successful_joins)} accounts\n"
+                    if successful_joins:
+                        response_text += f"  - {', '.join(successful_joins)}\n"
+                    
+                    if failed_joins:
+                        response_text += f"• ❌ Failed to join: {len(failed_joins)} accounts\n"
+                        response_text += f"  - {', '.join(failed_joins)}\n"
+                    
+                    response_text += "\n"
+                
+                # Add member count if available
+                if member_count is not None:
+                    response_text += f"👥 Current member count: {member_count}\n"
+                else:
+                    response_text += "❓ Could not retrieve member count\n"
+                
+                await status_message.edit_text(response_text)
             else:
-                await update.message.reply_text("❌ Failed to add group. Group may already exist.")
+                await status_message.edit_text(f"❌ Failed to add group: {result['message']}")
                 
         except ValueError:
-            await update.message.reply_text("❌ Invalid format. Group ID and max invites must be numbers.")
+            await update.message.reply_text("❌ Invalid format. Group ID must be a number.")
+        except Exception as e:
+            logger.error(f"Error in add_group_command: {e}")
+            await update.message.reply_text(f"❌ An error occurred while adding the group: {str(e)}")
     
     async def remove_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /remove_group command"""
@@ -581,10 +634,16 @@ To get an invitation, use the `/invite` command
             await update.message.reply_text("❌ This command is only available to administrators.")
             return
         
-        # Get group statistics
+        # Send initial message
+        status_message = await update.message.reply_text("📊 Collecting group information and updating member counts...")
+        
+        # Update member counts for all groups
+        update_results = await self.group_manager.update_all_groups_member_count(self.account_manager)
+        
+        # Get updated group statistics
         group_stats = self.group_manager.get_group_stats()
         
-        text = "🏢 **Groups Information**\n\n"
+        text = "🏢 Groups Information (Updated)\n\n"
         
         for group in group_stats['groups_details']:
             group_id = group['group_id']
@@ -602,13 +661,17 @@ To get an invitation, use the `/invite` command
                 updated_text = f" (updated: {updated_date.strftime('%Y-%m-%d %H:%M')})"
             
             status = "✅" if group['is_active'] else "❌"
-            text += f"{status} **{group['group_name']}** (ID: `{group_id}`)\n"
-            text += f"   👥 Members: {member_text}{updated_text}\n\n"
+            text += f"{status} {group['group_name']} (ID: {group_id})\n"
+            text += f"   👥 Members: {member_text}{updated_text}\n"
+            text += f"   🔗 Link: {group.get('invite_link', 'N/A')}\n\n"
         
-        if not group_stats['groups_details']:
-            text += "No groups found."
+        # Add update summary
+        text += f"📈 Update Summary:\n"
+        text += f"• ✅ Successfully updated: {update_results['updated']} groups\n"
+        text += f"• ❌ Failed to update: {update_results['failed']} groups\n"
+        text += f"• 📊 Total groups: {len(group_stats['groups_details'])}"
         
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        await status_message.edit_text(text)
     
     async def accounts_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /accounts_info command"""
@@ -643,6 +706,95 @@ To get an invitation, use the `/invite` command
             text += "No accounts found."
         
         await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+    
+    async def blacklist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /blacklist command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        if len(context.args) < 2:
+            await update.message.reply_text(
+                "Usage: /blacklist <user_id> <reason>\n"
+                "Example: /blacklist 123456789 Spam behavior"
+            )
+            return
+        
+        try:
+            user_id = int(context.args[0])
+            reason = " ".join(context.args[1:])
+            
+            success = self.blacklist_manager.add_user(
+                user_id, reason, update.effective_user.id
+            )
+            
+            if success:
+                await update.message.reply_text(
+                    f"🚫 User {user_id} added to blacklist.\n"
+                    f"**Reason:** {reason}"
+                )
+            else:
+                await update.message.reply_text("❌ Failed to add user to blacklist.")
+                
+        except ValueError:
+            await update.message.reply_text("❌ Invalid user ID format.")
+    
+    async def unblacklist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /unblacklist command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text("Usage: /unblacklist <user_id>")
+            return
+        
+        try:
+            user_id = int(context.args[0])
+            
+            success = self.blacklist_manager.remove_user(user_id)
+            
+            if success:
+                await update.message.reply_text(f"✅ User {user_id} removed from blacklist.")
+            else:
+                await update.message.reply_text(f"❌ User {user_id} not found in blacklist.")
+                
+        except ValueError:
+            await update.message.reply_text("❌ Invalid user ID format.")
+    
+    async def blacklist_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /blacklist_info command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        # If user_id provided, show specific user info
+        if context.args:
+            try:
+                user_id = int(context.args[0])
+                entry = self.blacklist_manager.get_user_info(user_id)
+                
+                if entry:
+                    from datetime import datetime
+                    added_date = datetime.fromtimestamp(entry.added_date)
+                    
+                    info_text = f"🚫 **Blacklist Entry for User {user_id}**\n\n"
+                    info_text += f"**Username:** {entry.username or 'Not set'}\n"
+                    info_text += f"**Reason:** {entry.reason}\n"
+                    info_text += f"**Added by:** {entry.added_by}\n"
+                    info_text += f"**Added date:** {added_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    info_text += f"**Status:** {'Active' if entry.is_active else 'Inactive'}"
+                    
+                    await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
+                else:
+                    await update.message.reply_text(f"❌ User {user_id} not found in blacklist.")
+                    
+            except ValueError:
+                await update.message.reply_text("❌ Invalid user ID format.")
+        else:
+            # Show blacklist summary
+            summary = self.blacklist_manager.get_blacklist_summary()
+            await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
     
     def start_bot(self):
         """Synchronous bot startup"""

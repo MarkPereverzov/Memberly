@@ -58,6 +58,8 @@ class TelegramGroup:
     invite_link: str
     is_active: bool = True
     assigned_accounts: List[str] = None  # session_names of accounts
+    member_count: int = 0
+    last_updated: float = 0.0
     
     def __post_init__(self):
         if self.assigned_accounts is None:
@@ -66,7 +68,13 @@ class TelegramGroup:
 class ConfigManager:
     """Configuration manager"""
     
-    def __init__(self, config_dir: str = "config", db_path: str = "data/bot_database.db"):
+    def __init__(self, config_dir: str = "config", db_path: str = None):
+        if db_path is None:
+            # Default to project root data directory  
+            script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            data_dir = os.path.join(script_dir, '..', 'data')
+            db_path = os.path.join(data_dir, "bot_database.db")
+            
         self.config_dir = config_dir
         self.db_path = db_path
         self.bot_config = BotConfig.from_env()
@@ -154,7 +162,9 @@ class ConfigManager:
                     group_name=db_group.group_name,
                     invite_link=db_group.invite_link,
                     is_active=db_group.is_active,
-                    assigned_accounts=db_group.assigned_accounts
+                    assigned_accounts=db_group.assigned_accounts,
+                    member_count=getattr(db_group, 'member_count', 0),
+                    last_updated=getattr(db_group, 'last_updated', 0.0)
                 )
                 groups.append(group)
             
