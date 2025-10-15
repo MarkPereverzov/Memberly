@@ -45,19 +45,22 @@ class AccountManager:
                 api_id=account.api_id,
                 api_hash=account.api_hash,
                 phone_number=account.phone,
-                workdir=self.session_dir
+                workdir=self.session_dir,
+                sleep_threshold=60  # Prevent FloodWait for requests < 60 seconds
             )
             
             # Connect to account with retry logic for database locks
-            max_retries = 3
+            max_retries = 5
             for retry in range(max_retries):
                 try:
                     await client.start()
                     break
                 except Exception as e:
-                    if "database is locked" in str(e).lower() and retry < max_retries - 1:
-                        logger.warning(f"Database locked for {account.session_name}, retrying in {retry + 1} seconds...")
-                        await asyncio.sleep(retry + 1)
+                    error_str = str(e).lower()
+                    if ("database is locked" in error_str or "database" in error_str) and retry < max_retries - 1:
+                        wait_time = (retry + 1) * 2  # Exponential backoff: 2, 4, 6, 8 seconds
+                        logger.warning(f"Database locked for {account.session_name}, retrying in {wait_time} seconds... (attempt {retry + 1}/{max_retries})")
+                        await asyncio.sleep(wait_time)
                         continue
                     else:
                         raise e

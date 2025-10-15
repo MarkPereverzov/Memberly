@@ -15,7 +15,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
 
-from config.config import ConfigManager, BotConfig
+from config.config import ConfigManager, BotConfig, UserAccount
 from src.account_manager import AccountManager
 from src.group_manager import GroupManager
 from src.cooldown_manager import CooldownManager
@@ -114,6 +114,7 @@ class InviteBot:
         # Admin commands - Group & Account Management
         self.application.add_handler(CommandHandler("groups_info", self.groups_info_command))
         self.application.add_handler(CommandHandler("accounts_info", self.accounts_info_command))
+        self.application.add_handler(CommandHandler("add_account", self.add_account_command))
         self.application.add_handler(CommandHandler("add_group", self.add_group_command))
         self.application.add_handler(CommandHandler("remove_group", self.remove_group_command))
         self.application.add_handler(CommandHandler("join_groups", self.join_groups_command))
@@ -189,7 +190,7 @@ To get an invitation, use the `/invite` command
         # Check if user is whitelisted
         if not self._is_whitelisted(user_id):
             await update.message.reply_text(
-                "❌ You don't have access to this bot. Contact the administrator."
+                "⚠️ You don't have access to this bot. Contact the administrator."
             )
             return
         
@@ -341,7 +342,7 @@ To get an invitation, use the `/invite` command
         elif already_member:
             result_message = f"ℹ️ You are already a member of all {len(already_member)} groups.\n"
         elif failed_invites:
-            result_message = f"❌ Could not add you to some groups.\n\n"
+            result_message = f"⚠️ Could not add you to some groups.\n\n"
             
             # Check for specific PEER_ID_INVALID errors
             contact_errors = []
@@ -366,7 +367,7 @@ To get an invitation, use the `/invite` command
             
             # Provide specific instructions based on error types
             if user_not_accessible:
-                result_message += f"<b>❌ User Not Accessible ({len(user_not_accessible)} groups):</b>\n"
+                result_message += f"<b>⚠️ User Not Accessible ({len(user_not_accessible)} groups):</b>\n"
                 result_message += f"<i>The bot cannot reach you due to privacy settings:</i>\n"
                 result_message += f"1. Please start a conversation with {bot_account_info}\n"
                 result_message += f"2. Send any message (like 'hi') to establish contact\n"
@@ -431,7 +432,7 @@ To get an invitation, use the `/invite` command
         elif self._is_whitelisted(user_id):
             status_text = "✅ **You are whitelisted**"
         else:
-            status_text = "❌ **You are not whitelisted, contact administrator**"
+            status_text = "⚠️ **You are not whitelisted, contact administrator**"
         
         await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
     
@@ -454,6 +455,7 @@ To get an invitation, use the `/invite` command
             help_text += "*Group & Account Management:*\n"
             help_text += "• `/groups_info` - List groups with ID and members\n"
             help_text += "• `/accounts_info` - List accounts with statuses\n"
+            help_text += "• `/add_account` - Add new Telegram account\n"
             help_text += "• `/add_group (name) (link)` - Add group (auto-detects ID)\n"
             help_text += "• `/remove_group (id)` - Remove group\n"
             help_text += "• `/join_groups` - Join all accounts to groups\n\n"
@@ -485,7 +487,7 @@ To get an invitation, use the `/invite` command
             
         else:
             # Non-whitelisted user
-            help_text += "**❌ Access Restricted**\n\n"
+            help_text += "**⚠️ Access Restricted**\n\n"
             help_text += "You are not in the whitelist.\n"
             help_text += "To get access to the bot, contact the administrator.\n\n"
             help_text += "**📋 Available Commands:**\n"
@@ -498,7 +500,7 @@ To get an invitation, use the `/invite` command
     async def block_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /block command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         if not context.args:
@@ -520,12 +522,12 @@ To get an invitation, use the `/invite` command
             await update.message.reply_text(f"✅ User @{username} blocked for {hours} hours.")
             
         except ValueError:
-            await update.message.reply_text("❌ Invalid format. Hours must be a number.")
+            await update.message.reply_text("⚠️ Invalid format. Hours must be a number.")
     
     async def unblock_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /unblock command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         if not context.args:
@@ -547,7 +549,7 @@ To get an invitation, use the `/invite` command
     async def join_groups_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /join_groups command - automatically join all accounts to all groups"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         # Send initial message
@@ -558,7 +560,7 @@ To get an invitation, use the `/invite` command
             active_groups = self.group_manager.get_active_groups()
             
             if not active_groups:
-                await status_message.edit_text("❌ No active groups found.")
+                await status_message.edit_text("⚠️ No active groups found.")
                 return
             
             # Start auto-join process
@@ -587,7 +589,7 @@ To get an invitation, use the `/invite` command
                     status_icon = "✅"
                     total_success_groups += 1
                 else:
-                    status_icon = "❌"
+                    status_icon = "⚠️"
                     total_failed_groups += 1
                 
                 response_lines.append(f"{status_icon} {group_name} (ID: {group_id})")
@@ -596,7 +598,7 @@ To get an invitation, use the `/invite` command
             response_lines.append("")
             response_lines.append("� Update Summary:")
             response_lines.append(f"• ✅ Successfully: {total_success_groups} groups")
-            response_lines.append(f"• ❌ Failed: {total_failed_groups} groups")
+            response_lines.append(f"• ⚠️ Failed: {total_failed_groups} groups")
             response_lines.append(f"• 📊 Total: {len(active_groups)} groups")
             
             response_text = "\n".join(response_lines)
@@ -605,7 +607,7 @@ To get an invitation, use the `/invite` command
             await status_message.edit_text(response_text)
             
         except Exception as e:
-            error_text = f"❌ Error during auto-join process: {str(e)}"
+            error_text = f"⚠️ Error during auto-join process: {str(e)}"
             try:
                 await status_message.edit_text(error_text)
             except:
@@ -614,7 +616,7 @@ To get an invitation, use the `/invite` command
     async def whitelist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /whitelist command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         if len(context.args) < 2:
@@ -632,7 +634,7 @@ To get an invitation, use the `/invite` command
             username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
             
             if days <= 0:
-                await update.message.reply_text("❌ Days must be a positive number.")
+                await update.message.reply_text("⚠️ Days must be a positive number.")
                 return
             
             # Try to get user_id from database first (if user has interacted with bot before)
@@ -655,15 +657,15 @@ To get an invitation, use the `/invite` command
                     f"✅ User @{username} (ID: {user_id}) added to whitelist for {days} days."
                 )
             else:
-                await update.message.reply_text("❌ Failed to add user to whitelist.")
+                await update.message.reply_text("⚠️ Failed to add user to whitelist.")
                 
         except ValueError:
-            await update.message.reply_text("❌ Invalid format. Days must be a number.")
+            await update.message.reply_text("⚠️ Invalid format. Days must be a number.")
     
     async def remove_whitelist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /remove_whitelist command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         if not context.args:
@@ -690,12 +692,12 @@ To get an invitation, use the `/invite` command
         if success:
             await update.message.reply_text(f"✅ User @{username} (ID: {user_id}) removed from whitelist.")
         else:
-            await update.message.reply_text(f"❌ User @{username} (ID: {user_id}) not found in whitelist.")
+            await update.message.reply_text(f"⚠️ User @{username} (ID: {user_id}) not found in whitelist.")
     
     async def add_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /add_group command - now with auto ID detection"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         if len(context.args) < 2:
@@ -711,7 +713,7 @@ To get an invitation, use the `/invite` command
             invite_link = context.args[1]
             
             if not invite_link.startswith('https://t.me/'):
-                await update.message.reply_text("❌ Invalid invite link. Must start with https://t.me/")
+                await update.message.reply_text("⚠️ Invalid invite link. Must start with https://t.me/")
                 return
             
             # Send initial message
@@ -748,7 +750,7 @@ To get an invitation, use the `/invite` command
                         response_text += f"  - {', '.join(successful_joins)}\n"
                     
                     if failed_joins:
-                        response_text += f"• ❌ Failed to join: {len(failed_joins)} accounts\n"
+                        response_text += f"• ⚠️ Failed to join: {len(failed_joins)} accounts\n"
                         response_text += f"  - {', '.join(failed_joins)}\n"
                     
                     response_text += "\n"
@@ -761,16 +763,16 @@ To get an invitation, use the `/invite` command
                 
                 await status_message.edit_text(response_text)
             else:
-                await status_message.edit_text(f"❌ Failed to add group: {result['message']}")
+                await status_message.edit_text(f"⚠️ Failed to add group: {result['message']}")
                 
         except Exception as e:
             logger.error(f"Error in add_group_command: {e}")
-            await update.message.reply_text(f"❌ An error occurred while adding the group: {str(e)}")
+            await update.message.reply_text(f"⚠️ An error occurred while adding the group: {str(e)}")
     
     async def remove_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /remove_group command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         if not context.args:
@@ -785,15 +787,15 @@ To get an invitation, use the `/invite` command
             if success:
                 await update.message.reply_text(f"✅ Group with ID {group_id} removed successfully.")
             else:
-                await update.message.reply_text(f"❌ Group with ID {group_id} not found.")
+                await update.message.reply_text(f"⚠️ Group with ID {group_id} not found.")
                 
         except ValueError:
-            await update.message.reply_text("❌ Invalid group ID.")
+            await update.message.reply_text("⚠️ Invalid group ID.")
     
     async def groups_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /groups_info command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         # Send initial message
@@ -805,7 +807,7 @@ To get an invitation, use the `/invite` command
         # Get updated group statistics
         group_stats = self.group_manager.get_group_stats()
         
-        text = "🏢 Groups Information (Updated)\n\n"
+        text = "🔄 Groups Information (Updated)\n\n"
         
         for group in group_stats['groups_details']:
             group_id = group['group_id']
@@ -822,23 +824,23 @@ To get an invitation, use the `/invite` command
                 updated_date = datetime.fromtimestamp(last_updated)
                 updated_text = f" (updated: {updated_date.strftime('%Y-%m-%d %H:%M')})"
             
-            status = "✅" if group['is_active'] else "❌"
+            status = "✅" if group['is_active'] else "⚠️"
             text += f"{status} {group['group_name']} (ID: {group_id})\n"
             text += f"   👥 Members: {member_text}{updated_text}\n"
             text += f"   🔗 Link: {group.get('invite_link', 'N/A')}\n\n"
         
         # Add update summary
         text += f"📈 Update Summary:\n"
-        text += f"• ✅ Successfully updated: {update_results['updated']} groups\n"
-        text += f"• ❌ Failed to update: {update_results['failed']} groups\n"
-        text += f"• 📊 Total groups: {len(group_stats['groups_details'])}"
+        text += f"• ✅ Successfully: {update_results['updated']} groups\n"
+        text += f"• ⚠️ Failed: {update_results['failed']} groups\n"
+        text += f"• 📊 Total: {len(group_stats['groups_details'])}"
         
         await status_message.edit_text(text)
     
     async def accounts_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /accounts_info command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         # Get account statistics with detailed info
@@ -859,12 +861,12 @@ To get an invitation, use the `/invite` command
                     status_icon = "✅"
                     successful_accounts += 1
                 else:
-                    status_icon = "❌"
+                    status_icon = "⚠️"
                     failed_accounts += 1
                 
                 response_lines.append(f"{status_icon} {account_name} (ID: {account_id})")
         else:
-            response_lines.append("❌ No accounts found")
+            response_lines.append("⚠️ No accounts found")
             failed_accounts = 1
         
         # Add summary
@@ -872,16 +874,174 @@ To get an invitation, use the `/invite` command
         response_lines.append("")
         response_lines.append("📈 Update Summary:")
         response_lines.append(f"• ✅ Successfully: {successful_accounts} accounts")
-        response_lines.append(f"• ❌ Failed: {failed_accounts} accounts")
+        response_lines.append(f"• ⚠️ Failed: {failed_accounts} accounts")
         response_lines.append(f"• 📊 Total: {total_accounts}")
         
         response_text = "\n".join(response_lines)
         await update.message.reply_text(response_text)
     
+    async def add_account_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /add_account command - interactive account addition"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
+            return
+        
+        await update.message.reply_text(
+            "🔄 Add New Telegram Account\n\n"
+            "⚠️ How to get API credentials:\n"
+            "1. Go to https://my.telegram.org\n"
+            "2. Log in with your phone number\n"
+            "3. Go to 'API development tools'\n"
+            "4. Create an application (if you haven't already)\n"
+            "5. Copy your api_id and api_hash\n\n"
+            "⚠️ Important:\n"
+            "• Keep your API credentials secure\n"
+            "• Each account needs its own unique session_name\n"
+            "• The phone number must match the Telegram account"
+        )
+        
+        # Check if arguments are provided
+        if len(context.args) < 4:
+            return
+        
+        try:
+            session_name = context.args[0]
+            api_id = int(context.args[1])
+            api_hash = context.args[2]
+            phone = context.args[3]
+            
+            # Validate phone format
+            if not phone.startswith('+'):
+                await update.message.reply_text(
+                    "⚠️ Invalid phone format. Phone number must start with '+' and include country code.\n"
+                    "Example: +1234567890"
+                )
+                return
+            
+            # Check if session name already exists
+            existing_accounts = self.config_manager.load_accounts()
+            if any(acc.session_name == session_name for acc in existing_accounts):
+                await update.message.reply_text(
+                    f"⚠️ Account with session name '{session_name}' already exists.\n"
+                    "Please choose a different name."
+                )
+                return
+            
+            # Send status message
+            status_msg = await update.message.reply_text(
+                f"🔄 Adding account '{session_name}'...\n"
+                "This will create a new session and may require authentication."
+            )
+            
+            # Create new account
+            new_account = UserAccount(
+                session_name=session_name,
+                api_id=api_id,
+                api_hash=api_hash,
+                phone=phone,
+                is_active=True,
+                groups_assigned=[]
+            )
+            
+            # Save to database
+            try:
+                self.database_manager.add_account(
+                    session_name=session_name,
+                    api_id=api_id,
+                    api_hash=api_hash,
+                    phone=phone,
+                    is_active=True,
+                    groups_assigned=[]
+                )
+                
+                # Try to initialize the client
+                await status_msg.edit_text(
+                    f"🔄 Account '{session_name}' saved to database.\n"
+                    "Attempting to connect..."
+                )
+                
+                # Create client
+                from pyrogram import Client
+                import os
+                
+                script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                session_dir = os.path.join(script_dir, "telegram_invite_bot", "data", "sessions")
+                
+                client = Client(
+                    name=session_name,
+                    api_id=api_id,
+                    api_hash=api_hash,
+                    phone_number=phone,
+                    workdir=session_dir
+                )
+                
+                # Start client (this will trigger phone code request if needed)
+                try:
+                    await client.start()
+                    
+                    # Get user info
+                    me = await client.get_me()
+                    
+                    await client.stop()
+                    
+                    await status_msg.edit_text(
+                        f"✅ Account added successfully!\n\n"
+                        f"📱 Session Name: {session_name}\n"
+                        f"👤 User: {me.first_name} (@{me.username or 'N/A'})\n"
+                        f"🆔 User ID: {me.id}\n"
+                        f"📞 Phone: {phone}\n\n"
+                        f"✨ The account is now active and ready to use!\n"
+                        f"Use /accounts_info to see all accounts."
+                    )
+                    
+                    # Reload accounts in account manager
+                    self.accounts = self.config_manager.load_accounts()
+                    await self.account_manager.initialize()
+                    
+                except Exception as e:
+                    error_message = str(e)
+                    
+                    if "phone_code" in error_message.lower():
+                        await status_msg.edit_text(
+                            f"⚠️ Phone code required!\n\n"
+                            f"Account '{session_name}' has been saved, but needs authentication.\n\n"
+                            f"Next steps:\n"
+                            f"1. Stop the bot\n"
+                            f"2. Run the bot again\n"
+                            f"3. Enter the verification code sent to {phone}\n"
+                            f"4. If 2FA is enabled, enter your password\n\n"
+                            f"The account will be activated after successful authentication."
+                        )
+                    else:
+                        await status_msg.edit_text(
+                            f"⚠️ Account saved but connection failed\n\n"
+                            f"Session: '{session_name}'\n"
+                            f"Error: {error_message}\n\n"
+                            f"The account has been added to the database but may need manual authentication.\n"
+                            f"Please check the logs and restart the bot if necessary."
+                        )
+                        
+            except Exception as e:
+                await status_msg.edit_text(
+                    f"⚠️ Failed to add account:\n"
+                    f"Error: {str(e)}\n\n"
+                    f"Please check your credentials and try again."
+                )
+                logger.error(f"Error adding account {session_name}: {e}")
+                
+        except ValueError:
+            await update.message.reply_text(
+                "⚠️ Invalid API ID. It must be a number.\n"
+                "Example: 12345678"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Error processing command: {str(e)}")
+            logger.error(f"Error in add_account_command: {e}")
+    
     async def blacklist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /blacklist command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         if len(context.args) < 2:
@@ -919,15 +1079,15 @@ To get an invitation, use the `/invite` command
                     f"**Reason:** {reason}"
                 )
             else:
-                await update.message.reply_text("❌ Failed to add user to blacklist.")
+                await update.message.reply_text("⚠️ Failed to add user to blacklist.")
                 
         except Exception as e:
-            await update.message.reply_text(f"❌ Error processing command: {str(e)}")
+            await update.message.reply_text(f"⚠️ Error processing command: {str(e)}")
     
     async def unblacklist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /unblacklist command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         if not context.args:
@@ -955,15 +1115,15 @@ To get an invitation, use the `/invite` command
             if success:
                 await update.message.reply_text(f"✅ User @{username} (ID: {user_id}) removed from blacklist.")
             else:
-                await update.message.reply_text(f"❌ User @{username} (ID: {user_id}) not found in blacklist.")
+                await update.message.reply_text(f"⚠️ User @{username} (ID: {user_id}) not found in blacklist.")
                 
         except Exception as e:
-            await update.message.reply_text(f"❌ Error processing command: {str(e)}")
+            await update.message.reply_text(f"⚠️ Error processing command: {str(e)}")
     
     async def blacklist_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /blacklist_info command"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
+            await update.message.reply_text("⚠️ This command is only available to administrators.")
             return
         
         # If username provided, show specific user info
@@ -1001,10 +1161,10 @@ To get an invitation, use the `/invite` command
                     
                     await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
                 else:
-                    await update.message.reply_text(f"❌ User @{username} (ID: {user_id}) not found in blacklist.")
+                    await update.message.reply_text(f"⚠️ User @{username} (ID: {user_id}) not found in blacklist.")
                     
             except Exception as e:
-                await update.message.reply_text(f"❌ Error processing command: {str(e)}")
+                await update.message.reply_text(f"⚠️ Error processing command: {str(e)}")
         else:
             # Show blacklist summary
             summary = self.blacklist_manager.get_blacklist_summary()

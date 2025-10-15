@@ -278,4 +278,4 @@ class BlacklistManager:
             
         except Exception as e:
             logger.error(f"Error getting blacklist summary: {e}")
-            return "❌ Error getting blacklist summary"
+            return "⚠️ Error getting blacklist summary"
