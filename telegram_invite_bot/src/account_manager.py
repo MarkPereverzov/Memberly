@@ -149,29 +149,42 @@ class AccountManager:
             return False, "Client not available"
         
         try:
-            # Get the proper chat object for the group
-            chat = None
+            # Try to add user directly using available methods
+            chat_id_to_use = None
+            group_title = "group"
             
+            # Method 1: Try using invite_link first
             if invite_link:
-                # Use invite link to get chat info
                 try:
-                    chat = await client.get_chat(invite_link)
+                    # Join the chat first to get proper access
+                    chat = await client.join_chat(invite_link)
+                    chat_id_to_use = chat.id
+                    group_title = getattr(chat, 'title', 'group')
+                    logger.info(f"Joined chat via invite link: {group_title} ({chat_id_to_use})")
                 except Exception as e:
-                    logger.warning(f"Could not get chat from invite link {invite_link}: {e}")
+                    logger.warning(f"Could not join chat via invite link {invite_link}: {e}")
             
-            # If we still don't have chat, try using group_id directly
-            if not chat:
+            # Method 2: Try using the original group_id
+            if not chat_id_to_use:
                 try:
+                    # Try to get chat info using group_id directly
                     chat = await client.get_chat(group_id)
+                    # For ChatPreview objects, we need to use the original group_id
+                    chat_id_to_use = group_id
+                    group_title = getattr(chat, 'title', 'group')
                 except Exception as e:
                     logger.warning(f"Could not get chat with group_id {group_id}: {e}")
-                    return False, f"Invalid group ID: {group_id}"
+                    chat_id_to_use = group_id  # Use original group_id as fallback
             
-            # Now try to add user using the chat object
-            await client.add_chat_members(chat.id, user_id)
+            # Method 3: If still no success, use group_id directly
+            if not chat_id_to_use:
+                chat_id_to_use = group_id
             
-            logger.info(f"User {user_id} added to group {chat.title} ({chat.id}) via account {account.session_name}")
-            return True, f"Successfully added to group {chat.title}"
+            # Now try to add user
+            await client.add_chat_members(chat_id_to_use, user_id)
+            
+            logger.info(f"User {user_id} added to group {group_title} ({chat_id_to_use}) via account {account.session_name}")
+            return True, f"Successfully added to group {group_title}"
             
         except FloodWait as e:
             logger.warning(f"FloodWait for account {account.session_name}: waiting {e.value} seconds")
@@ -197,6 +210,10 @@ class AccountManager:
                 return False, "Too many requests, try again later"
             elif "peer id invalid" in error_msg:
                 return False, f"Invalid group ID: {group_id}"
+            elif "chatpreview" in error_msg and "attribute" in error_msg:
+                return False, "Chat preview error - group may be private"
+            elif "has no attribute 'id'" in error_msg:
+                return False, "Chat object error - unable to access group"
             else:
                 logger.error(f"Error adding user {user_id} to group {group_id} via {account.session_name}: {e}")
                 return False, f"Error: {str(e)}"
