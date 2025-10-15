@@ -59,16 +59,15 @@ class InviteBot:
         # Get script directory for correct paths
         script_dir = os.path.dirname(os.path.abspath(__file__))
         config_dir = os.path.join(script_dir, 'config')
-        data_dir = os.path.join(script_dir, '..', 'data')
+        data_dir = os.path.join(script_dir, 'data')
         
         self.config_manager = ConfigManager(config_dir)
         self.account_manager = AccountManager(self.config_manager)
         self.group_manager = GroupManager(self.config_manager)
         self.cooldown_manager = CooldownManager(config=self.config_manager.bot_config)
         
-        # Initialize database and whitelist managers - use root project database
-        root_data_dir = os.path.join(os.path.dirname(data_dir), "data")  # Go up to project root
-        db_path = os.path.join(root_data_dir, "bot_database.db")
+        # Initialize database and whitelist managers - use telegram_invite_bot/data
+        db_path = os.path.join(data_dir, "bot_database.db")
         self.database_manager = DatabaseManager(db_path)
         self.whitelist_manager = WhitelistManager(
             self.database_manager, 
@@ -99,8 +98,9 @@ class InviteBot:
         # Register handlers
         self._register_handlers()
         
-        # Start group statistics collection
-        await self.group_stats_collector.start_collection()
+        # Note: Automatic group statistics collection disabled
+        # Statistics are collected on-demand via /groups_info command
+        # await self.group_stats_collector.start_collection()
         
     
     def _register_handlers(self):
@@ -124,8 +124,6 @@ class InviteBot:
         self.application.add_handler(CommandHandler("blacklist", self.blacklist_command))
         self.application.add_handler(CommandHandler("unblacklist", self.unblacklist_command))
         self.application.add_handler(CommandHandler("blacklist_info", self.blacklist_info_command))
-        self.application.add_handler(CommandHandler("diagnose_user", self.diagnose_user_command))
-        self.application.add_handler(CommandHandler("force_contact", self.force_contact_command))
     
     def _is_admin(self, user_id: int) -> bool:
         """Check if user is an administrator"""
@@ -237,28 +235,48 @@ To get an invitation, use the `/invite` command
         except Exception:
             bot_account_info = "our bot account"
         
-        # Try a quick contact check first
+        # Try a more aggressive contact establishment approach
         try:
+            # First attempt: normal add_user_to_contacts
             contact_success, contact_msg = await self.account_manager.add_user_to_contacts(primary_account, user_id)
             if contact_success:
                 can_reach_user = True
                 logger.info(f"User {user_id} is reachable: {contact_msg}")
             else:
-                logger.info(f"User {user_id} not reachable: {contact_msg}")
+                logger.info(f"User {user_id} not reachable via normal method: {contact_msg}")
                 
-                # If we can't reach user, try to send a contact establishment message
-                try:
-                    send_success, send_msg = await self.account_manager.send_contact_message(primary_account, user_id)
-                    if send_success:
-                        await update.message.reply_text(f"📞 {send_msg}\n\nPlease reply to the message from {bot_account_info} and then try /invite again for better results.")
-                        return  # Exit early - user should respond first
-                    else:
-                        logger.info(f"Could not send contact message: {send_msg}")
-                except Exception as send_error:
-                    logger.warning(f"Error sending contact message: {send_error}")
+                # Second attempt: Try with all available accounts
+                for account in all_accounts:
+                    try:
+                        alt_success, alt_msg = await self.account_manager.add_user_to_contacts(account, user_id)
+                        if alt_success:
+                            can_reach_user = True
+                            logger.info(f"Successfully added user {user_id} to contacts via account {account.session_name}")
+                            break
+                    except Exception as alt_error:
+                        logger.debug(f"Failed to add contact via {account.session_name}: {alt_error}")
+                        continue
+                
+                # If still can't reach user, try to send a contact establishment message
+                if not can_reach_user:
+                    try:
+                        send_success, send_msg = await self.account_manager.send_contact_message(primary_account, user_id)
+                        if send_success:
+                            await update.message.reply_text(f"📞 {send_msg}\n\nPlease reply to the message from {bot_account_info} and then try /invite again for better results.")
+                            return  # Exit early - user should respond first
+                        else:
+                            logger.info(f"Could not send contact message: {send_msg}")
+                    except Exception as send_error:
+                        logger.warning(f"Error sending contact message: {send_error}")
                     
         except Exception as contact_error:
             logger.warning(f"Error checking contact status: {contact_error}")
+        
+        # Show progress based on contact establishment
+        if can_reach_user:
+            await update.message.reply_text(f"✅ Contact established! Processing invitations to {len(all_groups)} groups...")
+        else:
+            await update.message.reply_text(f"⚠️ Contact issues detected. Attempting to add to {len(all_groups)} groups anyway...")
         
         account_index = 0
         
@@ -291,12 +309,6 @@ To get an invitation, use the `/invite` command
                     
                     # Record successful invitation
                     self.cooldown_manager.record_invite_attempt(user_id, group.group_id, True)
-                    self.group_manager.record_invitation(user_id, group.group_id)
-                    
-                    # Record in database
-                    self.database_manager.record_invitation(
-                        user_id, group.group_id, group.group_name, True
-                    )
                 else:
                     # Failed to add - likely privacy settings issue
                     if "Cannot add:" in message:
@@ -306,11 +318,6 @@ To get an invitation, use the `/invite` command
                     
                     # Record failed attempt
                     self.cooldown_manager.record_invite_attempt(user_id, group.group_id, False)
-                    
-                    # Record in database
-                    self.database_manager.record_invitation(
-                        user_id, group.group_id, group.group_name, False, message
-                    )
                     
             except Exception as e:
                 failed_invites.append(f"{group.group_name}: Error - {str(e)}")
@@ -457,11 +464,7 @@ To get an invitation, use the `/invite` command
             help_text += "• `/blacklist @username (reason)` - Add to blacklist\n"
             help_text += "• `/unblacklist @username` - Remove from blacklist\n"
             help_text += "• `/blacklist_info (@username)` - Show blacklist info\n"
-            help_text += "• `/blacklist_info` - Show blacklist info of all users\n\n"
-            
-            help_text += "*Diagnostics:*\n"
-            help_text += "• `/diagnose_user (user_id)` - Diagnose user invitation issues\n"
-            help_text += "• `/force_contact (user_id)` - Force contact establishment with user\n"
+            help_text += "• `/blacklist_info` - Show blacklist info of all users\n"
             
         elif self._is_whitelisted(user_id):
             # Whitelisted user commands
@@ -650,11 +653,6 @@ To get an invitation, use the `/invite` command
             if success:
                 await update.message.reply_text(
                     f"✅ User @{username} (ID: {user_id}) added to whitelist for {days} days."
-                )
-                
-                # Record in database
-                self.database_manager.record_invitation(
-                    user_id, 0, "Whitelist Addition", True, f"Added by admin for {days} days"
                 )
             else:
                 await update.message.reply_text("❌ Failed to add user to whitelist.")
@@ -1012,171 +1010,6 @@ To get an invitation, use the `/invite` command
             summary = self.blacklist_manager.get_blacklist_summary()
             await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
     
-    async def diagnose_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler for /diagnose_user command - helps diagnose user invitation issues"""
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is only available to administrators.")
-            return
-        
-        if not context.args:
-            await update.message.reply_text(
-                "Usage: /diagnose_user <user_id>\n"
-                "Example: /diagnose_user 865733495\n\n"
-                "This command helps diagnose why a user cannot be added to groups."
-            )
-            return
-        
-        try:
-            user_id = int(context.args[0])
-            
-            # Send initial message
-            status_message = await update.message.reply_text(f"🔍 Diagnosing user {user_id}...")
-            
-            # Get first available account for testing
-            active_accounts = self.account_manager.get_active_accounts()
-            if not active_accounts:
-                await status_message.edit_text("❌ No active accounts available for diagnosis.")
-                return
-            
-            account = active_accounts[0]
-            
-            # Test contact status
-            contact_success, contact_message = await self.account_manager.add_user_to_contacts(account, user_id)
-            
-            # Get user information from database
-            user_info = self.database_manager.get_user_info(user_id)
-            
-            # Check whitelist status
-            is_whitelisted = self._is_whitelisted(user_id)
-            
-            # Check blacklist status
-            is_blacklisted = self.blacklist_manager.is_user_blocked(user_id)
-            
-            # Get recent invitation attempts
-            recent_invites = self.database_manager.get_user_recent_invitations(user_id, limit=5)
-            
-            # Build diagnostic report
-            report = f"📊 **User Diagnosis Report**\n\n"
-            report += f"🆔 **User ID:** {user_id}\n"
-            
-            if user_info:
-                report += f"👤 **Username:** @{user_info.get('username', 'N/A')}\n"
-                report += f"📝 **Name:** {user_info.get('first_name', 'N/A')}\n"
-                report += f"📅 **First seen:** {user_info.get('first_seen', 'N/A')}\n"
-                report += f"🕐 **Last seen:** {user_info.get('last_seen', 'N/A')}\n"
-            else:
-                report += f"❓ **User not found in database**\n"
-            
-            report += f"\n🔍 **Status Checks:**\n"
-            report += f"• Whitelisted: {'✅ Yes' if is_whitelisted else '❌ No'}\n"
-            report += f"• Blacklisted: {'⚠️ Yes' if is_blacklisted else '✅ No'}\n"
-            
-            report += f"\n📞 **Contact Test (Account: {account.session_name}):**\n"
-            if contact_success:
-                report += f"✅ **Contact Status:** {contact_message}\n"
-                report += f"💡 **Solution:** User can be added to groups\n"
-            else:
-                report += f"❌ **Contact Issue:** {contact_message}\n"
-                if "user not found" in contact_message.lower() or "not accessible" in contact_message.lower():
-                    report += f"💡 **Solution:** User ID may be invalid or user has strict privacy settings\n"
-                elif "must start conversation" in contact_message.lower():
-                    report += f"💡 **Solution:** User needs to send /start to bot account @{account.session_name}\n"
-                else:
-                    report += f"💡 **Solution:** Check user privacy settings\n"
-            
-            if recent_invites:
-                report += f"\n📈 **Recent Invitation Attempts ({len(recent_invites)}):**\n"
-                for invite in recent_invites[:3]:  # Show last 3
-                    status = "✅" if invite.get('success') else "❌"
-                    group_name = invite.get('group_name', 'Unknown')
-                    error_msg = invite.get('error_message', '')
-                    report += f"{status} {group_name}"
-                    if error_msg:
-                        report += f" - {error_msg[:50]}{'...' if len(error_msg) > 50 else ''}"
-                    report += "\n"
-            else:
-                report += f"\n📈 **Recent Invitations:** None found\n"
-            
-            # Add recommendations
-            report += f"\n💡 **Recommendations:**\n"
-            if not is_whitelisted:
-                report += f"1. Add user to whitelist: `/whitelist {user_id} 7`\n"
-            if not contact_success:
-                if "must start conversation" in contact_message.lower():
-                    report += f"2. Ask user to send /start to bot\n"
-                    report += f"3. User should message bot account directly\n"
-                else:
-                    report += f"2. Check if user ID is correct\n"
-                    report += f"3. User may need to adjust privacy settings\n"
-            
-            await status_message.edit_text(report, parse_mode=ParseMode.MARKDOWN)
-            
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID. Please provide a numeric user ID.")
-        except Exception as e:
-            logger.error(f"Error in diagnose_user_command: {e}")
-            await update.message.reply_text(f"❌ An error occurred during diagnosis: {str(e)}")
-    
-    async def force_contact_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Force contact establishment with a user (Admin only)"""
-        if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ This command is for administrators only.")
-            return
-        
-        if not context.args or len(context.args) != 1:
-            await update.message.reply_text(
-                "📝 Usage: /force_contact <user_id>\n\n"
-                "This command attempts to send a contact message to the specified user."
-            )
-            return
-        
-        try:
-            user_id = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID. Please provide a numeric user ID.")
-            return
-        
-        # Get available accounts
-        accounts = self.account_manager.get_active_accounts()
-        if not accounts:
-            await update.message.reply_text("❌ No active accounts available.")
-            return
-        
-        primary_account = accounts[0]
-        
-        try:
-            # Get bot account info
-            bot_info_success, bot_account_info = await self.account_manager.get_bot_info(primary_account)
-            if not bot_info_success:
-                bot_account_info = "bot account"
-            
-            # Attempt to send contact message
-            success, message = await self.account_manager.send_contact_message(primary_account, user_id)
-            
-            if success:
-                await update.message.reply_text(
-                    f"✅ **Contact message sent successfully!**\n\n"
-                    f"👤 **User ID:** {user_id}\n"
-                    f"🤖 **Via Account:** {bot_account_info}\n"
-                    f"📋 **Status:** {message}\n\n"
-                    f"The user should now reply to establish contact."
-                )
-            else:
-                await update.message.reply_text(
-                    f"❌ **Failed to send contact message:**\n\n"
-                    f"👤 **User ID:** {user_id}\n"
-                    f"🤖 **Via Account:** {bot_account_info}\n"
-                    f"📋 **Error:** {message}\n\n"
-                    f"💡 **Possible reasons:**\n"
-                    f"• User has blocked the account\n"
-                    f"• User's privacy settings prevent messages\n"
-                    f"• User must start conversation first"
-                )
-                
-        except Exception as e:
-            logger.error(f"Error in force_contact_command: {e}")
-            await update.message.reply_text(f"❌ An error occurred: {str(e)}")
-    
     def start_bot(self):
         """Synchronous bot startup"""
         
@@ -1222,9 +1055,9 @@ To get an invitation, use the `/invite` command
             if self.account_manager:
                 await self.account_manager.shutdown()
             
-            # Stop group statistics collection
-            if self.group_stats_collector:
-                await self.group_stats_collector.stop_collection()
+            # Note: Automatic group statistics collection disabled
+            # if self.group_stats_collector:
+            #     await self.group_stats_collector.stop_collection()
                 
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")

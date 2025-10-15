@@ -148,58 +148,215 @@ class AccountManager:
             logger.error(f"Client for account {account.session_name} not found")
             return False, "Client not available"
         
+        peer = None
+        user_info = None
+        
         try:
             # Try to resolve the peer first
             try:
                 peer = await client.resolve_peer(user_id)
                 logger.debug(f"Successfully resolved peer for user {user_id}")
             except Exception as resolve_error:
-                error_str = str(resolve_error).lower()
-                if "peer_id_invalid" in error_str:
-                    logger.warning(f"Cannot resolve peer {user_id}: User not accessible")
-                    return False, "User not accessible - they may need to message bot first"
-                else:
-                    logger.warning(f"Peer resolve error for {user_id}: {resolve_error}")
-                    return False, f"Cannot resolve user: {str(resolve_error)}"
+                logger.warning(f"Cannot resolve peer {user_id}: {resolve_error}")
+                # Don't return here - continue with other methods
             
-            # Get user info
-            user_info = await client.get_users(user_id)
-            
-            # Check if already in contacts
-            if hasattr(user_info, 'is_contact') and user_info.is_contact:
-                logger.info(f"User {user_id} already in contacts of {account.session_name}")
-                return True, "Already in contacts"
-            
-            # Get username for better error messages
-            username = getattr(user_info, 'username', None)
-            first_name = getattr(user_info, 'first_name', 'User')
-            
-            # Try to add to contacts using phone number or username
+            # Try to get user info
             try:
-                # If user has username, try adding by username
-                if username:
-                    contact_result = await client.add_contact(user_id, first_name, "")
-                    if contact_result:
-                        logger.info(f"Successfully added user {user_id} (@{username}) to contacts")
-                        return True, "Added to contacts"
-                else:
-                    # For users without username, we can't add them directly
-                    logger.info(f"User {user_id} has no username, cannot add to contacts directly")
-                    return False, "User has no username - they must message bot first"
+                user_info = await client.get_users(user_id)
+                
+                # Check if already in contacts
+                if hasattr(user_info, 'is_contact') and user_info.is_contact:
+                    logger.info(f"User {user_id} already in contacts of {account.session_name}")
+                    return True, "Already in contacts"
                     
-            except Exception as add_error:
-                error_str = str(add_error).lower()
-                logger.warning(f"Failed to add user {user_id} to contacts: {add_error}")
-                return False, f"Cannot add to contacts: User must message bot first"
+            except Exception as user_info_error:
+                logger.warning(f"Cannot get user info for {user_id}: {user_info_error}")
+                # Try to get info from database
+                try:
+                    from src.database_manager import DatabaseManager
+                    db_manager = DatabaseManager()
+                    db_user_info = db_manager.get_user_info(user_id)
+                    if db_user_info:
+                        logger.info(f"Found user {user_id} info in database: {db_user_info.get('username', 'No username')}")
+                        # Create a simple object with database info
+                        class DBUserInfo:
+                            def __init__(self, data):
+                                self.username = data.get('username')
+                                self.first_name = data.get('first_name', 'User')
+                                self.last_name = data.get('last_name', '')
+                                self.phone_number = None  # Not stored in database
+                                self.is_contact = False
+                        user_info = DBUserInfo(db_user_info)
+                        logger.info(f"Using database info for user {user_id}")
+                    else:
+                        logger.warning(f"User {user_id} not found in database either")
+                except Exception as db_error:
+                    logger.warning(f"Failed to get user info from database: {db_error}")
             
+            # Get user details (with fallbacks)
+            username = getattr(user_info, 'username', None) if user_info else None
+            first_name = getattr(user_info, 'first_name', 'User') if user_info else 'User'
+            last_name = getattr(user_info, 'last_name', '') if user_info else ''
+            phone = getattr(user_info, 'phone_number', None) if user_info else None
+            
+            
+            # Try multiple methods to add to contacts
+            logger.info(f"Attempting to add user {user_id} to contacts using multiple methods")
+            
+            # Method 1: Try using phone number if available
+            if phone:
+                try:
+                    from pyrogram.raw.functions.contacts import ImportContacts
+                    from pyrogram.raw.types import InputPhoneContact
+                    
+                    logger.info(f"Attempting to add user {user_id} using phone: {phone}")
+                    input_contact = InputPhoneContact(
+                        client_id=0,
+                        phone=phone,
+                        first_name=first_name,
+                        last_name=last_name or ""
+                    )
+                    result = await client.invoke(ImportContacts(contacts=[input_contact]))
+                    if result.imported:
+                        logger.info(f"Successfully added user {user_id} (@{username}) to contacts via phone")
+                        return True, "Added to contacts via phone"
+                except Exception as phone_error:
+                    logger.warning(f"Phone method failed for user {user_id}: {phone_error}")
+            
+            # Method 2: Try adding by user ID directly (only if we have user_info)
+            if user_info:
+                try:
+                    logger.info(f"Attempting to add user {user_id} directly to contacts")
+                    contact_result = await client.add_contact(user_id, first_name, last_name or "")
+                    logger.info(f"Add contact result: {contact_result}")
+                    
+                    # Verify if contact was added by checking again
+                    try:
+                        updated_user_info = await client.get_users(user_id)
+                        if hasattr(updated_user_info, 'is_contact') and updated_user_info.is_contact:
+                            logger.info(f"Successfully added user {user_id} (@{username}) to contacts")
+                            return True, "Added to contacts successfully"
+                        else:
+                            logger.warning(f"Contact add appeared to succeed but user {user_id} still not in contacts")
+                    except Exception as verify_error:
+                        logger.warning(f"Could not verify contact addition: {verify_error}")
+                        # Assume success if add_contact didn't throw an error
+                        return True, "Added to contacts (verification failed)"
+                        
+                except Exception as direct_add_error:
+                    logger.warning(f"Direct add_contact failed for user {user_id}: {direct_add_error}")
+            
+            # Method 3: Try using raw API for adding contacts (only if we have peer)
+            if peer:
+                try:
+                    logger.info(f"Trying raw API method for user {user_id}")
+                    from pyrogram.raw.functions.contacts import AddContact
+                    
+                    result = await client.invoke(AddContact(
+                        id=peer,
+                        first_name=first_name,
+                        last_name=last_name or "",
+                        phone="",
+                        add_phone_privacy_exception=False
+                    ))
+                    
+                    if result:
+                        logger.info(f"Successfully added user {user_id} to contacts via raw API")
+                        return True, "Added to contacts via raw API"
+                        
+                except Exception as raw_api_error:
+                    logger.warning(f"Raw API add contact failed: {raw_api_error}")
+            
+            # Method 4: Try searching by username if available
+            if username:
+                try:
+                    # Clean username (remove @ if present)
+                    clean_username = username.lstrip('@') if username else None
+                    if clean_username:
+                        logger.info(f"Attempting to find and add user by username: @{clean_username}")
+                        
+                        # Try to get user by username
+                        username_user = await client.get_users(clean_username)
+                        if username_user:
+                            logger.info(f"Found user via username @{clean_username}: {username_user.first_name} (ID: {username_user.id})")
+                            
+                            # Verify it's the same user
+                            if username_user.id == user_id or user_id == 0:
+                                # Try to add via username contact
+                                try:
+                                    contact_result = await client.add_contact(
+                                        username_user.id, 
+                                        username_user.first_name or first_name,
+                                        username_user.last_name or last_name or ""
+                                    )
+                                    logger.info(f"Successfully added user {username_user.id} (@{clean_username}) via username search")
+                                    return True, f"Added to contacts via username @{clean_username}"
+                                except Exception as add_error:
+                                    logger.warning(f"Failed to add contact via username: {add_error}")
+                                    # Even if add fails, we can try to resolve peer now
+                                    try:
+                                        peer = await client.resolve_peer(username_user.id)
+                                        logger.info(f"Successfully resolved peer via username for user {username_user.id}")
+                                        return True, f"Contact accessible via username @{clean_username}"
+                                    except Exception as resolve_error:
+                                        logger.warning(f"Could not resolve peer after username search: {resolve_error}")
+                            else:
+                                logger.warning(f"Username @{clean_username} belongs to different user ID: {username_user.id} vs requested {user_id}")
+                except Exception as username_error:
+                    logger.warning(f"Username search method failed for @{username}: {username_error}")
+            
+            # If all methods failed
+            logger.warning(f"All methods to add user {user_id} to contacts failed")
+            return False, "Cannot add to contacts - user may need to message bot first"
+                    
         except Exception as e:
             error_str = str(e).lower()
-            if "peer_id_invalid" in error_str:
+            if "peer_id_invalid" in error_str or "user not accessible" in error_str:
                 logger.warning(f"Could not find user {user_id} with {account.session_name}: User ID is invalid or user is not accessible")
                 return False, "User not found or not accessible (check privacy settings)"
             else:
                 logger.warning(f"Could not check contact status for user {user_id} with {account.session_name}: {e}")
                 return False, f"Contact check failed: {str(e)}"
+
+    async def force_add_to_contacts(self, account: UserAccount, user_id: int, phone_number: str = None) -> tuple[bool, str]:
+        """Force add user to contacts using multiple methods"""
+        client = self.clients.get(account.session_name)
+        if not client:
+            return False, "Client not available"
+        
+        try:
+            # Get user info first
+            user_info = await client.get_users(user_id)
+            first_name = getattr(user_info, 'first_name', 'User')
+            last_name = getattr(user_info, 'last_name', '')
+            username = getattr(user_info, 'username', None)
+            
+            # If phone number is provided, try using it
+            if phone_number:
+                try:
+                    from pyrogram.raw.functions.contacts import ImportContacts
+                    from pyrogram.raw.types import InputPhoneContact
+                    
+                    input_contact = InputPhoneContact(
+                        client_id=0,
+                        phone=phone_number,
+                        first_name=first_name,
+                        last_name=last_name or ""
+                    )
+                    result = await client.invoke(ImportContacts(contacts=[input_contact]))
+                    if result.imported:
+                        logger.info(f"Force added user {user_id} to contacts using phone {phone_number}")
+                        return True, f"Added to contacts using phone number"
+                        
+                except Exception as phone_error:
+                    logger.warning(f"Failed to add via phone number: {phone_error}")
+            
+            # Try the regular method as fallback
+            return await self.add_user_to_contacts(account, user_id)
+            
+        except Exception as e:
+            logger.error(f"Force add to contacts failed: {e}")
+            return False, f"Force add failed: {str(e)}"
 
     async def send_contact_message(self, account: UserAccount, user_id: int, bot_username: str = None) -> tuple[bool, str]:
         """Send a message to establish contact with user through bot account"""
@@ -280,6 +437,34 @@ This helps establish contact for better invitation success rates.
         try:
             # Simple approach: use group_id directly
             group_title = f"Group {abs(group_id)}"  # Simple fallback name
+            
+            # Step 0: First resolve the group peer to ensure we have access
+            logger.info(f"Resolving group peer for {group_id} with {account.session_name}")
+            try:
+                # Try to get the chat to ensure peer is in cache
+                chat = await client.get_chat(group_id)
+                group_title = chat.title or group_title
+                logger.info(f"Successfully resolved group: {group_title} ({group_id})")
+            except Exception as group_error:
+                error_str = str(group_error).lower()
+                if "peer_id_invalid" in error_str or "channel_invalid" in error_str:
+                    logger.error(f"Cannot access group {group_id}: Bot is not a member or doesn't have access")
+                    
+                    # Try to rejoin using invite link if available
+                    if invite_link:
+                        logger.info(f"Attempting to rejoin group {group_id} using invite link...")
+                        try:
+                            chat = await client.join_chat(invite_link)
+                            group_title = chat.title or group_title
+                            logger.info(f"Successfully rejoined group: {group_title}")
+                        except Exception as rejoin_error:
+                            logger.error(f"Failed to rejoin group: {rejoin_error}")
+                            return False, f"Bot not member of group. Failed to rejoin: {str(rejoin_error)}"
+                    else:
+                        return False, "Bot not member of group and no invite link available"
+                else:
+                    logger.error(f"Error resolving group {group_id}: {group_error}")
+                    return False, f"Cannot access group: {str(group_error)}"
             
             # Step 1: Check contact status (don't try to add, just check)
             logger.info(f"Checking contact status for user {user_id} with {account.session_name}")

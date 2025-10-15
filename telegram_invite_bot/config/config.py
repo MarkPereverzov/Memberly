@@ -70,9 +70,9 @@ class ConfigManager:
     
     def __init__(self, config_dir: str = "config", db_path: str = None):
         if db_path is None:
-            # Default to project root data directory  
+            # Default to telegram_invite_bot/data directory  
             script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            data_dir = os.path.join(script_dir, '..', 'data')
+            data_dir = os.path.join(script_dir, 'data')
             db_path = os.path.join(data_dir, "bot_database.db")
             
         self.config_dir = config_dir
