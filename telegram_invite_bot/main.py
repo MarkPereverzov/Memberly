@@ -66,8 +66,9 @@ class InviteBot:
         self.group_manager = GroupManager(self.config_manager)
         self.cooldown_manager = CooldownManager(config=self.config_manager.bot_config)
         
-        # Initialize database and whitelist managers
-        db_path = os.path.join(data_dir, "bot_database.db")
+        # Initialize database and whitelist managers - use root project database
+        root_data_dir = os.path.join(os.path.dirname(data_dir), "data")  # Go up to project root
+        db_path = os.path.join(root_data_dir, "bot_database.db")
         self.database_manager = DatabaseManager(db_path)
         self.whitelist_manager = WhitelistManager(
             self.database_manager, 
@@ -123,6 +124,8 @@ class InviteBot:
         self.application.add_handler(CommandHandler("blacklist", self.blacklist_command))
         self.application.add_handler(CommandHandler("unblacklist", self.unblacklist_command))
         self.application.add_handler(CommandHandler("blacklist_info", self.blacklist_info_command))
+        self.application.add_handler(CommandHandler("diagnose_user", self.diagnose_user_command))
+        self.application.add_handler(CommandHandler("force_contact", self.force_contact_command))
     
     def _is_admin(self, user_id: int) -> bool:
         """Check if user is an administrator"""
@@ -206,11 +209,12 @@ To get an invitation, use the `/invite` command
             )
             return
         
-        await update.message.reply_text(f"🔄 Starting invitations to {len(all_groups)} groups...\n💡 First, checking contact status for better success rates.")
+        await update.message.reply_text(f"🔄 Starting invitations to {len(all_groups)} groups...\n💡 First, attempting to establish contact for better success rates.")
         
         successful_invites = []  # Successfully added to groups
         already_member = []      # Already in group  
         failed_invites = []      # Failed to add (need privacy settings change)
+        contact_messages_sent = [] # Groups where contact message was sent
         
         # Get all available accounts
         all_accounts = self.account_manager.get_active_accounts()
@@ -219,6 +223,42 @@ To get an invitation, use the `/invite` command
                 "😔 No available accounts to send invitations right now."
             )
             return
+        
+        # First, check if we can reach the user at all
+        primary_account = all_accounts[0]  # Use first account for contact establishment
+        can_reach_user = False
+        bot_account_info = ""
+        
+        # Get bot account information
+        try:
+            bot_info_success, bot_account_info = await self.account_manager.get_bot_info(primary_account)
+            if not bot_info_success:
+                bot_account_info = "our bot account"
+        except Exception:
+            bot_account_info = "our bot account"
+        
+        # Try a quick contact check first
+        try:
+            contact_success, contact_msg = await self.account_manager.add_user_to_contacts(primary_account, user_id)
+            if contact_success:
+                can_reach_user = True
+                logger.info(f"User {user_id} is reachable: {contact_msg}")
+            else:
+                logger.info(f"User {user_id} not reachable: {contact_msg}")
+                
+                # If we can't reach user, try to send a contact establishment message
+                try:
+                    send_success, send_msg = await self.account_manager.send_contact_message(primary_account, user_id)
+                    if send_success:
+                        await update.message.reply_text(f"📞 {send_msg}\n\nPlease reply to the message from {bot_account_info} and then try /invite again for better results.")
+                        return  # Exit early - user should respond first
+                    else:
+                        logger.info(f"Could not send contact message: {send_msg}")
+                except Exception as send_error:
+                    logger.warning(f"Error sending contact message: {send_error}")
+                    
+        except Exception as contact_error:
+            logger.warning(f"Error checking contact status: {contact_error}")
         
         account_index = 0
         
@@ -295,13 +335,77 @@ To get an invitation, use the `/invite` command
             result_message = f"ℹ️ You are already a member of all {len(already_member)} groups.\n"
         elif failed_invites:
             result_message = f"❌ Could not add you to some groups.\n\n"
-            result_message += f"<b>💡 To improve success rate:</b>\n"
-            result_message += f"1. Send /start to our bot accounts first\n"
-            result_message += f"2. Check your privacy settings allow group invitations\n"
-            result_message += f"3. Make sure you're not already in these groups\n\n"
-            result_message += f"<b>Failed groups ({len(failed_invites)}):</b>\n"
+            
+            # Check for specific PEER_ID_INVALID errors
+            contact_errors = []
+            privacy_errors = []
+            other_errors = []
+            invite_link_available = []
+            user_not_accessible = []
+            
             for failure in failed_invites:
-                result_message += f"• {failure}\n"
+                if "user must message our bot account first" in failure.lower() or \
+                   "contact check failed" in failure.lower():
+                    contact_errors.append(failure)
+                elif "user not found or not accessible" in failure.lower() or \
+                     "user not accessible" in failure.lower():
+                    user_not_accessible.append(failure)
+                elif "privacy" in failure.lower():
+                    privacy_errors.append(failure)
+                elif "invite link:" in failure.lower():
+                    invite_link_available.append(failure)
+                else:
+                    other_errors.append(failure)
+            
+            # Provide specific instructions based on error types
+            if user_not_accessible:
+                result_message += f"<b>❌ User Not Accessible ({len(user_not_accessible)} groups):</b>\n"
+                result_message += f"<i>The bot cannot reach you due to privacy settings:</i>\n"
+                result_message += f"1. Please start a conversation with {bot_account_info}\n"
+                result_message += f"2. Send any message (like 'hi') to establish contact\n"
+                result_message += f"3. Then try /invite again\n\n"
+                result_message += f"<i>This is required due to Telegram's privacy protection.</i>\n\n"
+            
+            if contact_errors:
+                result_message += f"<b>🔗 Contact Issues ({len(contact_errors)} groups):</b>\n"
+                result_message += f"<i>Additional contact establishment needed:</i>\n"
+                result_message += f"1. Make sure you replied to {bot_account_info}\n"
+                result_message += f"2. Check if conversation is started\n"
+                result_message += f"3. Then try /invite again\n\n"
+                
+                for error in contact_errors[:3]:  # Show max 3 examples
+                    result_message += f"• {error}\n"
+                if len(contact_errors) > 3:
+                    result_message += f"• ... and {len(contact_errors) - 3} more\n"
+                result_message += "\n"
+            
+            if invite_link_available:
+                result_message += f"<b>🔗 Manual Join Required ({len(invite_link_available)} groups):</b>\n"
+                result_message += f"<i>Click these invite links to join manually:</i>\n"
+                for error in invite_link_available:
+                    result_message += f"• {error}\n"
+                result_message += "\n"
+            
+            if privacy_errors:
+                result_message += f"<b>🔒 Privacy Settings ({len(privacy_errors)} groups):</b>\n"
+                result_message += f"<i>Check your Telegram privacy settings:</i>\n"
+                result_message += f"1. Go to Settings → Privacy & Security\n"
+                result_message += f"2. Check 'Groups & Channels' settings\n"
+                result_message += f"3. Allow adding to groups\n\n"
+                for error in privacy_errors:
+                    result_message += f"• {error}\n"
+                result_message += "\n"
+            
+            if other_errors:
+                result_message += f"<b>⚠️ Other Issues ({len(other_errors)} groups):</b>\n"
+                for error in other_errors:
+                    result_message += f"• {error}\n"
+                result_message += "\n"
+            
+            result_message += f"<b>💡 General Tips:</b>\n"
+            result_message += f"• Make sure you haven't blocked our bot accounts\n"
+            result_message += f"• Check that you're not already in these groups\n"
+            result_message += f"• Contact admin if problems persist"
         else:
             result_message = "😔 No groups are available right now."
         
@@ -343,7 +447,7 @@ To get an invitation, use the `/invite` command
             help_text += "*Group & Account Management:*\n"
             help_text += "• `/groups_info` - List groups with ID and members\n"
             help_text += "• `/accounts_info` - List accounts with statuses\n"
-            help_text += "• `/add_group (id) (name) (link)` - Add group\n"
+            help_text += "• `/add_group (name) (link)` - Add group (auto-detects ID)\n"
             help_text += "• `/remove_group (id)` - Remove group\n"
             help_text += "• `/join_groups` - Join all accounts to groups\n\n"
             
@@ -353,7 +457,11 @@ To get an invitation, use the `/invite` command
             help_text += "• `/blacklist @username (reason)` - Add to blacklist\n"
             help_text += "• `/unblacklist @username` - Remove from blacklist\n"
             help_text += "• `/blacklist_info (@username)` - Show blacklist info\n"
-            help_text += "• `/blacklist_info` - Show blacklist info of all users\n"
+            help_text += "• `/blacklist_info` - Show blacklist info of all users\n\n"
+            
+            help_text += "*Diagnostics:*\n"
+            help_text += "• `/diagnose_user (user_id)` - Diagnose user invitation issues\n"
+            help_text += "• `/force_contact (user_id)` - Force contact establishment with user\n"
             
         elif self._is_whitelisted(user_id):
             # Whitelisted user commands
@@ -587,41 +695,49 @@ To get an invitation, use the `/invite` command
             await update.message.reply_text(f"❌ User @{username} (ID: {user_id}) not found in whitelist.")
     
     async def add_group_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler for /add_group command"""
+        """Handler for /add_group command - now with auto ID detection"""
         if not self._is_admin(update.effective_user.id):
             await update.message.reply_text("❌ This command is only available to administrators.")
             return
         
-        if len(context.args) < 3:
+        if len(context.args) < 2:
             await update.message.reply_text(
-                "Usage: /add_group <group_id> <group_name> <invite_link>\n"
-                "Example: /add_group -1001234567890 \"Test Group\" https://t.me/+abc123"
+                "Usage: /add_group <group_name> <invite_link>\n"
+                "Example: /add_group \"Test Group\" https://t.me/+abc123\n\n"
+                "💡 The bot will automatically join the group and detect its ID!"
             )
             return
         
         try:
-            group_id = int(context.args[0])
-            group_name = context.args[1]
-            invite_link = context.args[2]
+            group_name = context.args[0]
+            invite_link = context.args[1]
             
             if not invite_link.startswith('https://t.me/'):
                 await update.message.reply_text("❌ Invalid invite link. Must start with https://t.me/")
                 return
             
             # Send initial message
-            status_message = await update.message.reply_text(f"📋 Adding group '{group_name}'...")
+            status_message = await update.message.reply_text(f"� Joining group '{group_name}' to detect ID...")
             
-            # Use new async method with auto-join
-            result = await self.group_manager.add_group_with_auto_join(
-                group_id, group_name, invite_link, self.account_manager
+            # Use new method with auto ID detection
+            result = await self.group_manager.add_group_with_auto_id(
+                group_name, invite_link, self.account_manager
             )
             
             if result["success"]:
                 # Prepare detailed response
+                group_id = result.get("group_id")
                 join_results = result.get("join_results", {})
                 member_count = result.get("member_count")
+                join_message = result.get("join_message", "")
                 
-                response_text = f"✅ Group '{group_name}' added successfully!\n\n"
+                response_text = f"✅ Group '{group_name}' added successfully!\n"
+                response_text += f"🆔 Auto-detected ID: {group_id}\n"
+                response_text += f"🔗 Link: {invite_link}\n\n"
+                
+                # Add join message
+                if join_message:
+                    response_text += f"📝 Join Status: {join_message}\n\n"
                 
                 # Add join results
                 if join_results:
@@ -641,16 +757,14 @@ To get an invitation, use the `/invite` command
                 
                 # Add member count if available
                 if member_count is not None:
-                    response_text += f"👥 Current member count: {member_count}\n"
+                    response_text += f"👥 Current member count: {member_count}"
                 else:
-                    response_text += "❓ Could not retrieve member count\n"
+                    response_text += "❓ Could not retrieve member count"
                 
                 await status_message.edit_text(response_text)
             else:
                 await status_message.edit_text(f"❌ Failed to add group: {result['message']}")
                 
-        except ValueError:
-            await update.message.reply_text("❌ Invalid format. Group ID must be a number.")
         except Exception as e:
             logger.error(f"Error in add_group_command: {e}")
             await update.message.reply_text(f"❌ An error occurred while adding the group: {str(e)}")
@@ -897,6 +1011,171 @@ To get an invitation, use the `/invite` command
             # Show blacklist summary
             summary = self.blacklist_manager.get_blacklist_summary()
             await update.message.reply_text(summary, parse_mode=ParseMode.MARKDOWN)
+    
+    async def diagnose_user_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /diagnose_user command - helps diagnose user invitation issues"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "Usage: /diagnose_user <user_id>\n"
+                "Example: /diagnose_user 865733495\n\n"
+                "This command helps diagnose why a user cannot be added to groups."
+            )
+            return
+        
+        try:
+            user_id = int(context.args[0])
+            
+            # Send initial message
+            status_message = await update.message.reply_text(f"🔍 Diagnosing user {user_id}...")
+            
+            # Get first available account for testing
+            active_accounts = self.account_manager.get_active_accounts()
+            if not active_accounts:
+                await status_message.edit_text("❌ No active accounts available for diagnosis.")
+                return
+            
+            account = active_accounts[0]
+            
+            # Test contact status
+            contact_success, contact_message = await self.account_manager.add_user_to_contacts(account, user_id)
+            
+            # Get user information from database
+            user_info = self.database_manager.get_user_info(user_id)
+            
+            # Check whitelist status
+            is_whitelisted = self._is_whitelisted(user_id)
+            
+            # Check blacklist status
+            is_blacklisted = self.blacklist_manager.is_user_blocked(user_id)
+            
+            # Get recent invitation attempts
+            recent_invites = self.database_manager.get_user_recent_invitations(user_id, limit=5)
+            
+            # Build diagnostic report
+            report = f"📊 **User Diagnosis Report**\n\n"
+            report += f"🆔 **User ID:** {user_id}\n"
+            
+            if user_info:
+                report += f"👤 **Username:** @{user_info.get('username', 'N/A')}\n"
+                report += f"📝 **Name:** {user_info.get('first_name', 'N/A')}\n"
+                report += f"📅 **First seen:** {user_info.get('first_seen', 'N/A')}\n"
+                report += f"🕐 **Last seen:** {user_info.get('last_seen', 'N/A')}\n"
+            else:
+                report += f"❓ **User not found in database**\n"
+            
+            report += f"\n🔍 **Status Checks:**\n"
+            report += f"• Whitelisted: {'✅ Yes' if is_whitelisted else '❌ No'}\n"
+            report += f"• Blacklisted: {'⚠️ Yes' if is_blacklisted else '✅ No'}\n"
+            
+            report += f"\n📞 **Contact Test (Account: {account.session_name}):**\n"
+            if contact_success:
+                report += f"✅ **Contact Status:** {contact_message}\n"
+                report += f"💡 **Solution:** User can be added to groups\n"
+            else:
+                report += f"❌ **Contact Issue:** {contact_message}\n"
+                if "user not found" in contact_message.lower() or "not accessible" in contact_message.lower():
+                    report += f"💡 **Solution:** User ID may be invalid or user has strict privacy settings\n"
+                elif "must start conversation" in contact_message.lower():
+                    report += f"💡 **Solution:** User needs to send /start to bot account @{account.session_name}\n"
+                else:
+                    report += f"💡 **Solution:** Check user privacy settings\n"
+            
+            if recent_invites:
+                report += f"\n📈 **Recent Invitation Attempts ({len(recent_invites)}):**\n"
+                for invite in recent_invites[:3]:  # Show last 3
+                    status = "✅" if invite.get('success') else "❌"
+                    group_name = invite.get('group_name', 'Unknown')
+                    error_msg = invite.get('error_message', '')
+                    report += f"{status} {group_name}"
+                    if error_msg:
+                        report += f" - {error_msg[:50]}{'...' if len(error_msg) > 50 else ''}"
+                    report += "\n"
+            else:
+                report += f"\n📈 **Recent Invitations:** None found\n"
+            
+            # Add recommendations
+            report += f"\n💡 **Recommendations:**\n"
+            if not is_whitelisted:
+                report += f"1. Add user to whitelist: `/whitelist {user_id} 7`\n"
+            if not contact_success:
+                if "must start conversation" in contact_message.lower():
+                    report += f"2. Ask user to send /start to bot\n"
+                    report += f"3. User should message bot account directly\n"
+                else:
+                    report += f"2. Check if user ID is correct\n"
+                    report += f"3. User may need to adjust privacy settings\n"
+            
+            await status_message.edit_text(report, parse_mode=ParseMode.MARKDOWN)
+            
+        except ValueError:
+            await update.message.reply_text("❌ Invalid user ID. Please provide a numeric user ID.")
+        except Exception as e:
+            logger.error(f"Error in diagnose_user_command: {e}")
+            await update.message.reply_text(f"❌ An error occurred during diagnosis: {str(e)}")
+    
+    async def force_contact_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Force contact establishment with a user (Admin only)"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is for administrators only.")
+            return
+        
+        if not context.args or len(context.args) != 1:
+            await update.message.reply_text(
+                "📝 Usage: /force_contact <user_id>\n\n"
+                "This command attempts to send a contact message to the specified user."
+            )
+            return
+        
+        try:
+            user_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("❌ Invalid user ID. Please provide a numeric user ID.")
+            return
+        
+        # Get available accounts
+        accounts = self.account_manager.get_active_accounts()
+        if not accounts:
+            await update.message.reply_text("❌ No active accounts available.")
+            return
+        
+        primary_account = accounts[0]
+        
+        try:
+            # Get bot account info
+            bot_info_success, bot_account_info = await self.account_manager.get_bot_info(primary_account)
+            if not bot_info_success:
+                bot_account_info = "bot account"
+            
+            # Attempt to send contact message
+            success, message = await self.account_manager.send_contact_message(primary_account, user_id)
+            
+            if success:
+                await update.message.reply_text(
+                    f"✅ **Contact message sent successfully!**\n\n"
+                    f"👤 **User ID:** {user_id}\n"
+                    f"🤖 **Via Account:** {bot_account_info}\n"
+                    f"📋 **Status:** {message}\n\n"
+                    f"The user should now reply to establish contact."
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ **Failed to send contact message:**\n\n"
+                    f"👤 **User ID:** {user_id}\n"
+                    f"🤖 **Via Account:** {bot_account_info}\n"
+                    f"📋 **Error:** {message}\n\n"
+                    f"💡 **Possible reasons:**\n"
+                    f"• User has blocked the account\n"
+                    f"• User's privacy settings prevent messages\n"
+                    f"• User must start conversation first"
+                )
+                
+        except Exception as e:
+            logger.error(f"Error in force_contact_command: {e}")
+            await update.message.reply_text(f"❌ An error occurred: {str(e)}")
     
     def start_bot(self):
         """Synchronous bot startup"""

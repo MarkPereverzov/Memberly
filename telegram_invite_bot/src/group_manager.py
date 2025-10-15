@@ -256,6 +256,53 @@ class GroupManager:
             logger.error(f"Error adding group: {e}")
             return {"success": False, "message": str(e)}
     
+    async def add_group_with_auto_id(self, group_name: str, invite_link: str, account_manager) -> Dict:
+        """Add new group by automatically joining and getting ID"""
+        try:
+            # Step 1: Join group and get ID automatically
+            logger.info(f"Getting group ID for '{group_name}' by joining...")
+            success, group_id, join_message = await account_manager.join_group_and_get_id(invite_link, group_name)
+            
+            if not success:
+                return {"success": False, "message": f"Failed to join group: {join_message}"}
+            
+            logger.info(f"Retrieved group ID: {group_id} for '{group_name}'")
+            
+            # Step 2: Add the group to database with retrieved ID
+            new_group = self.config_manager.add_group(group_id, group_name, invite_link)
+            
+            # Reload group list
+            self.groups = self.config_manager.load_groups()
+            logger.info(f"Added new group: {group_name} with ID: {group_id}")
+            
+            # Step 3: Join all other accounts to this group
+            logger.info(f"Auto-joining all accounts to group: {group_name}")
+            join_results = await account_manager.join_group_with_accounts(invite_link, group_name)
+            
+            # Step 4: Get member count from the group
+            member_count = await account_manager.get_group_member_count(group_id, invite_link)
+            
+            # Update group with member count if retrieved
+            if member_count is not None:
+                self.update_group(group_id, member_count=member_count, last_updated=int(time.time()))
+                logger.info(f"Updated group {group_name} with member count: {member_count}")
+            
+            return {
+                "success": True,
+                "message": f"Group '{group_name}' added successfully with auto-detected ID: {group_id}",
+                "join_results": join_results,
+                "member_count": member_count,
+                "group_id": group_id,
+                "join_message": join_message
+            }
+            
+        except ValueError as e:
+            logger.error(f"Error adding group: {e}")
+            return {"success": False, "message": str(e)}
+        except Exception as e:
+            logger.error(f"Unexpected error adding group: {e}")
+            return {"success": False, "message": f"Unexpected error: {e}"}
+    
     def remove_group(self, group_id: int) -> bool:
         """Remove group"""
         group = self.get_group_by_id(group_id)

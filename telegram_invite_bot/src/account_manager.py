@@ -149,7 +149,20 @@ class AccountManager:
             return False, "Client not available"
         
         try:
-            # Get user info first
+            # Try to resolve the peer first
+            try:
+                peer = await client.resolve_peer(user_id)
+                logger.debug(f"Successfully resolved peer for user {user_id}")
+            except Exception as resolve_error:
+                error_str = str(resolve_error).lower()
+                if "peer_id_invalid" in error_str:
+                    logger.warning(f"Cannot resolve peer {user_id}: User not accessible")
+                    return False, "User not accessible - they may need to message bot first"
+                else:
+                    logger.warning(f"Peer resolve error for {user_id}: {resolve_error}")
+                    return False, f"Cannot resolve user: {str(resolve_error)}"
+            
+            # Get user info
             user_info = await client.get_users(user_id)
             
             # Check if already in contacts
@@ -157,14 +170,105 @@ class AccountManager:
                 logger.info(f"User {user_id} already in contacts of {account.session_name}")
                 return True, "Already in contacts"
             
-            # Since we can't send first message due to Telegram limitations,
-            # we'll just log the attempt and return a meaningful message
-            logger.info(f"User {user_id} not in contacts of {account.session_name}. Contact must be initiated by user.")
-            return False, "User must start conversation with our account first"
+            # Get username for better error messages
+            username = getattr(user_info, 'username', None)
+            first_name = getattr(user_info, 'first_name', 'User')
+            
+            # Try to add to contacts using phone number or username
+            try:
+                # If user has username, try adding by username
+                if username:
+                    contact_result = await client.add_contact(user_id, first_name, "")
+                    if contact_result:
+                        logger.info(f"Successfully added user {user_id} (@{username}) to contacts")
+                        return True, "Added to contacts"
+                else:
+                    # For users without username, we can't add them directly
+                    logger.info(f"User {user_id} has no username, cannot add to contacts directly")
+                    return False, "User has no username - they must message bot first"
+                    
+            except Exception as add_error:
+                error_str = str(add_error).lower()
+                logger.warning(f"Failed to add user {user_id} to contacts: {add_error}")
+                return False, f"Cannot add to contacts: User must message bot first"
             
         except Exception as e:
-            logger.warning(f"Could not check contact status for user {user_id} with {account.session_name}: {e}")
-            return False, f"Contact check failed: {str(e)}"
+            error_str = str(e).lower()
+            if "peer_id_invalid" in error_str:
+                logger.warning(f"Could not find user {user_id} with {account.session_name}: User ID is invalid or user is not accessible")
+                return False, "User not found or not accessible (check privacy settings)"
+            else:
+                logger.warning(f"Could not check contact status for user {user_id} with {account.session_name}: {e}")
+                return False, f"Contact check failed: {str(e)}"
+
+    async def send_contact_message(self, account: UserAccount, user_id: int, bot_username: str = None) -> tuple[bool, str]:
+        """Send a message to establish contact with user through bot account"""
+        client = self.clients.get(account.session_name)
+        if not client:
+            logger.error(f"Client for account {account.session_name} not found")
+            return False, "Client not available"
+        
+        try:
+            # First check if we can resolve the user
+            try:
+                peer = await client.resolve_peer(user_id)
+            except Exception as resolve_error:
+                if "peer_id_invalid" in str(resolve_error).lower():
+                    return False, "User must start conversation with bot first"
+                else:
+                    return False, f"Cannot reach user: {str(resolve_error)}"
+            
+            # Try to send a contact establishment message
+            try:
+                message_text = f"""
+🤖 **Hello from our Invitation System!**
+
+To ensure smooth group invitations, please:
+1. Reply to this message with any text (like "hi")
+2. Then use /invite command again
+
+This helps establish contact for better invitation success rates.
+                """
+                
+                await client.send_message(user_id, message_text)
+                logger.info(f"Contact message sent to user {user_id} from {account.session_name}")
+                return True, "Contact message sent - user should reply to establish contact"
+                
+            except Exception as send_error:
+                error_str = str(send_error).lower()
+                if "user_is_blocked" in error_str:
+                    return False, "User has blocked our account"
+                elif "peer_id_invalid" in error_str:
+                    return False, "User must start conversation with bot first"
+                elif "chat_write_forbidden" in error_str:
+                    return False, "Cannot message user - privacy settings prevent contact"
+                else:
+                    logger.warning(f"Failed to send contact message to {user_id}: {send_error}")
+                    return False, f"Cannot send message: {str(send_error)}"
+                    
+        except Exception as e:
+            logger.error(f"Error in send_contact_message for user {user_id}: {e}")
+            return False, f"Contact message failed: {str(e)}"
+
+    async def get_bot_info(self, account: UserAccount) -> tuple[bool, str]:
+        """Get information about the bot account for user instructions"""
+        client = self.clients.get(account.session_name)
+        if not client:
+            return False, "Client not available"
+        
+        try:
+            me = await client.get_me()
+            username = getattr(me, 'username', None)
+            first_name = getattr(me, 'first_name', 'Bot')
+            
+            if username:
+                return True, f"@{username}"
+            else:
+                return True, f"{first_name} ({me.phone or 'Bot Account'})"
+                
+        except Exception as e:
+            logger.error(f"Could not get bot info: {e}")
+            return False, "Unknown Bot Account"
 
     async def add_user_to_group(self, account: UserAccount, user_id: int, group_id: int, invite_link: str = None) -> tuple[bool, str]:
         """Add user directly to group - with contact checking"""
@@ -212,10 +316,23 @@ class AccountManager:
                 elif "peer_id_invalid" in error_str:
                     if contact_success:
                         logger.warning(f"PEER_ID_INVALID: Cannot add user {user_id} to group {group_id} despite having contact")
-                        return False, "Cannot add: Unknown contact issue"
+                        return False, "Cannot add: User may have privacy restrictions"
                     else:
                         logger.warning(f"PEER_ID_INVALID: Cannot add user {user_id} to group {group_id} - no contact established")
-                        return False, "Cannot add: User must message our account first"
+                        
+                        # Try to send invite link instead
+                        if invite_link:
+                            try:
+                                # Get user info for better messaging
+                                user_info = await client.get_users(user_id)
+                                username = getattr(user_info, 'username', None)
+                                
+                                # We can't send DM, but we can provide the invite link in response
+                                return False, f"Cannot add directly. Please share invite link: {invite_link}"
+                            except:
+                                return False, f"Cannot add: User must start conversation with bot first. Invite link: {invite_link or 'N/A'}"
+                        else:
+                            return False, "Cannot add: User must message our bot account first"
                 else:
                     logger.error(f"Failed to add user {user_id} to group {group_id}: {direct_add_error}")
                     return False, f"Failed to add: {str(direct_add_error)}"
@@ -243,7 +360,11 @@ class AccountManager:
             elif "too_many_requests" in error_msg:
                 return False, "Too many requests, try again later"
             elif "peer id invalid" in error_msg:
-                return False, f"Invalid group ID: {group_id}"
+                # More specific handling for peer ID invalid
+                if "user" in error_msg.lower():
+                    return False, f"User {user_id} not found or has privacy restrictions"
+                else:
+                    return False, f"Invalid group ID: {group_id}"
             elif "chatpreview" in error_msg and "attribute" in error_msg:
                 return False, "Chat preview error - group may be private"
             elif "has no attribute 'id'" in error_msg:
@@ -580,3 +701,66 @@ class AccountManager:
                 }
         
         return all_results
+    
+    async def join_group_and_get_id(self, invite_link: str, group_name: str) -> tuple[bool, int, str]:
+        """Join group by invite link and get its ID automatically
+        
+        Args:
+            invite_link: Telegram invite link (https://t.me/+hash or https://t.me/username)
+            group_name: Group name for logging
+            
+        Returns:
+            Tuple of (success: bool, group_id: int, message: str)
+        """
+        # Get first available account
+        active_accounts = [acc for acc in self.accounts if acc.is_active]
+        if not active_accounts:
+            return False, 0, "No active accounts available"
+        
+        account = active_accounts[0]  # Use first available account
+        client = self.clients.get(account.session_name)
+        if not client:
+            return False, 0, f"Client not available for account {account.session_name}"
+        
+        try:
+            logger.info(f"Attempting to join group '{group_name}' to get ID...")
+            
+            # Join the group and get chat info
+            chat = await client.join_chat(invite_link)
+            
+            # Get group ID from chat object
+            group_id = chat.id
+            chat_title = getattr(chat, 'title', group_name)
+            
+            logger.info(f"Successfully joined group '{chat_title}' with ID: {group_id}")
+            
+            return True, group_id, f"Successfully joined and retrieved ID: {group_id}"
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "already" in error_msg or "participant" in error_msg:
+                # Already a member - try to get chat info
+                try:
+                    # Extract identifier from invite link
+                    if "t.me/+" in invite_link:
+                        chat = await client.get_chat(invite_link)
+                    elif "t.me/" in invite_link:
+                        username = invite_link.split("t.me/")[-1]
+                        if username.startswith("@"):
+                            username = username[1:]
+                        chat = await client.get_chat(username)
+                    else:
+                        return False, 0, f"Invalid invite link format: {invite_link}"
+                    
+                    group_id = chat.id
+                    chat_title = getattr(chat, 'title', group_name)
+                    logger.info(f"Already member of group '{chat_title}' with ID: {group_id}")
+                    
+                    return True, group_id, f"Already member, retrieved ID: {group_id}"
+                    
+                except Exception as get_error:
+                    logger.error(f"Could not get group info after join attempt: {get_error}")
+                    return False, 0, f"Already member but could not retrieve ID: {get_error}"
+            else:
+                logger.error(f"Failed to join group '{group_name}': {e}")
+                return False, 0, f"Failed to join group: {e}"

@@ -119,7 +119,7 @@ python main.py
 - `/admin` - Administrator panel with interactive interface
 - `/whitelist <user_id> <days> [username]` - Add user to whitelist
 - `/remove_whitelist <user_id>` - Remove user from whitelist
-- `/add_group <id> <name> <link> [max_invites]` - Add new group
+- `/add_group <name> <link>` - Add new group (auto-detects ID by joining)
 - `/remove_group <id>` - Remove group
 - `/force_stats` - Force statistics collection
 - `/block <user_id> [hours]` - Block user
