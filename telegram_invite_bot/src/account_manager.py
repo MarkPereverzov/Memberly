@@ -141,50 +141,84 @@ class AccountManager:
             logger.error(f"Error sending invitation via {account.session_name}: {e}")
             return False
 
-    async def add_user_to_group(self, account: UserAccount, user_id: int, group_id: int, invite_link: str = None) -> tuple[bool, str]:
-        """Add user directly to group"""
+    async def add_user_to_contacts(self, account: UserAccount, user_id: int) -> tuple[bool, str]:
+        """Try to establish contact with user"""
         client = self.clients.get(account.session_name)
         if not client:
             logger.error(f"Client for account {account.session_name} not found")
             return False, "Client not available"
         
         try:
-            # Try to add user directly using available methods
-            chat_id_to_use = None
-            group_title = "group"
+            # Get user info first
+            user_info = await client.get_users(user_id)
             
-            # Method 1: Try using invite_link first
-            if invite_link:
-                try:
-                    # Join the chat first to get proper access
-                    chat = await client.join_chat(invite_link)
-                    chat_id_to_use = chat.id
-                    group_title = getattr(chat, 'title', 'group')
-                    logger.info(f"Joined chat via invite link: {group_title} ({chat_id_to_use})")
-                except Exception as e:
-                    logger.warning(f"Could not join chat via invite link {invite_link}: {e}")
+            # Check if already in contacts
+            if hasattr(user_info, 'is_contact') and user_info.is_contact:
+                logger.info(f"User {user_id} already in contacts of {account.session_name}")
+                return True, "Already in contacts"
             
-            # Method 2: Try using the original group_id
-            if not chat_id_to_use:
-                try:
-                    # Try to get chat info using group_id directly
-                    chat = await client.get_chat(group_id)
-                    # For ChatPreview objects, we need to use the original group_id
-                    chat_id_to_use = group_id
-                    group_title = getattr(chat, 'title', 'group')
-                except Exception as e:
-                    logger.warning(f"Could not get chat with group_id {group_id}: {e}")
-                    chat_id_to_use = group_id  # Use original group_id as fallback
+            # Since we can't send first message due to Telegram limitations,
+            # we'll just log the attempt and return a meaningful message
+            logger.info(f"User {user_id} not in contacts of {account.session_name}. Contact must be initiated by user.")
+            return False, "User must start conversation with our account first"
             
-            # Method 3: If still no success, use group_id directly
-            if not chat_id_to_use:
-                chat_id_to_use = group_id
+        except Exception as e:
+            logger.warning(f"Could not check contact status for user {user_id} with {account.session_name}: {e}")
+            return False, f"Contact check failed: {str(e)}"
+
+    async def add_user_to_group(self, account: UserAccount, user_id: int, group_id: int, invite_link: str = None) -> tuple[bool, str]:
+        """Add user directly to group - with contact checking"""
+        client = self.clients.get(account.session_name)
+        if not client:
+            logger.error(f"Client for account {account.session_name} not found")
+            return False, "Client not available"
+        
+        try:
+            # Simple approach: use group_id directly
+            group_title = f"Group {abs(group_id)}"  # Simple fallback name
             
-            # Now try to add user
-            await client.add_chat_members(chat_id_to_use, user_id)
+            # Step 1: Check contact status (don't try to add, just check)
+            logger.info(f"Checking contact status for user {user_id} with {account.session_name}")
+            contact_success, contact_message = await self.add_user_to_contacts(account, user_id)
             
-            logger.info(f"User {user_id} added to group {group_title} ({chat_id_to_use}) via account {account.session_name}")
-            return True, f"Successfully added to group {group_title}"
+            if contact_success:
+                logger.info(f"Contact status: {contact_message}")
+            else:
+                logger.warning(f"Contact issue: {contact_message}")
+            
+            # Step 2: Check if user is already in the group
+            try:
+                member = await client.get_chat_member(group_id, user_id)
+                if member.status in ["member", "administrator", "creator"]:
+                    logger.info(f"User {user_id} already in group {group_title}")
+                    return True, "User already in group"
+            except Exception as membership_check_error:
+                logger.debug(f"Could not check membership for user {user_id} in group {group_id}: {membership_check_error}")
+                # Continue with adding - user might not be in group
+            
+            # Step 3: Try to add user directly to group
+            try:
+                # Direct add attempt
+                await client.add_chat_members(group_id, user_id)
+                logger.info(f"User {user_id} successfully added to group {group_id} via account {account.session_name}")
+                return True, f"Successfully added to group"
+                
+            except Exception as direct_add_error:
+                error_str = str(direct_add_error).lower()
+                
+                if "user_already_participant" in error_str:
+                    logger.info(f"User {user_id} already in group {group_id}")
+                    return True, "User already in group"
+                elif "peer_id_invalid" in error_str:
+                    if contact_success:
+                        logger.warning(f"PEER_ID_INVALID: Cannot add user {user_id} to group {group_id} despite having contact")
+                        return False, "Cannot add: Unknown contact issue"
+                    else:
+                        logger.warning(f"PEER_ID_INVALID: Cannot add user {user_id} to group {group_id} - no contact established")
+                        return False, "Cannot add: User must message our account first"
+                else:
+                    logger.error(f"Failed to add user {user_id} to group {group_id}: {direct_add_error}")
+                    return False, f"Failed to add: {str(direct_add_error)}"
             
         except FloodWait as e:
             logger.warning(f"FloodWait for account {account.session_name}: waiting {e.value} seconds")

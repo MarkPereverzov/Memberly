@@ -206,10 +206,11 @@ To get an invitation, use the `/invite` command
             )
             return
         
-        await update.message.reply_text(f"🔄 Starting invitations to {len(all_groups)} groups...")
+        await update.message.reply_text(f"🔄 Starting invitations to {len(all_groups)} groups...\n💡 First, checking contact status for better success rates.")
         
-        successful_invites = []
-        failed_invites = []
+        successful_invites = []  # Successfully added to groups
+        already_member = []      # Already in group  
+        failed_invites = []      # Failed to add (need privacy settings change)
         
         # Get all available accounts
         all_accounts = self.account_manager.get_active_accounts()
@@ -240,7 +241,13 @@ To get an invitation, use the `/invite` command
                 )
                 
                 if success:
-                    successful_invites.append(group.group_name)
+                    # Check the type of success
+                    if "already in group" in message.lower():
+                        already_member.append(group.group_name)
+                        logger.info(f"User {user_id} already in group {group.group_name}")
+                    else:
+                        successful_invites.append(group.group_name)
+                        logger.info(f"Successfully processed user {user_id} for group {group.group_name}")
                     
                     # Record successful invitation
                     self.cooldown_manager.record_invite_attempt(user_id, group.group_id, True)
@@ -250,10 +257,12 @@ To get an invitation, use the `/invite` command
                     self.database_manager.record_invitation(
                         user_id, group.group_id, group.group_name, True
                     )
-                    
-                    logger.info(f"Successfully added user {user_id} to group {group.group_name}")
                 else:
-                    failed_invites.append(f"{group.group_name}: {message}")
+                    # Failed to add - likely privacy settings issue
+                    if "Cannot add:" in message:
+                        failed_invites.append(f"{group.group_name}: {message}")
+                    else:
+                        failed_invites.append(f"{group.group_name}: {message}")
                     
                     # Record failed attempt
                     self.cooldown_manager.record_invite_attempt(user_id, group.group_id, False)
@@ -275,26 +284,28 @@ To get an invitation, use the `/invite` command
         self.cooldown_manager.update_user_last_invite_time(user_id)
         
         # Prepare result message
-        result_message = "🎉 **Invitation Results**\n\n"
+        total_processed = len(successful_invites) + len(already_member)
         
+        # Simple and direct results
         if successful_invites:
-            result_message += f"✅ **Successfully added to {len(successful_invites)} groups:**\n"
+            result_message = f"✅ Successfully added to {len(successful_invites)} groups!\n"
             for group_name in successful_invites:
                 result_message += f"• {group_name}\n"
-            result_message += "\n"
-        
-        if failed_invites:
-            result_message += f"❌ **Failed to add to {len(failed_invites)} groups:**\n"
+        elif already_member:
+            result_message = f"ℹ️ You are already a member of all {len(already_member)} groups.\n"
+        elif failed_invites:
+            result_message = f"❌ Could not add you to some groups.\n\n"
+            result_message += f"<b>💡 To improve success rate:</b>\n"
+            result_message += f"1. Send /start to our bot accounts first\n"
+            result_message += f"2. Check your privacy settings allow group invitations\n"
+            result_message += f"3. Make sure you're not already in these groups\n\n"
+            result_message += f"<b>Failed groups ({len(failed_invites)}):</b>\n"
             for failure in failed_invites:
                 result_message += f"• {failure}\n"
-            result_message += "\n"
+        else:
+            result_message = "😔 No groups are available right now."
         
-        if not successful_invites and not failed_invites:
-            result_message += "😔 No invitations were processed.\n"
-        
-        result_message += "🎯 You have been directly added to the groups where possible!"
-        
-        await update.message.reply_text(result_message, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(result_message, parse_mode=ParseMode.HTML)
     
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /status command"""
