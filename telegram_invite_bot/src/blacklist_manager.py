@@ -245,17 +245,34 @@ class BlacklistManager:
     def get_blacklist_summary(self) -> str:
         """Get formatted summary of blacklist"""
         try:
+            # Get all active blacklisted users using database manager method
+            import sqlite3
+            with sqlite3.connect(self.db_manager.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT user_id, username, reason, added_date 
+                    FROM blacklist 
+                    WHERE is_active = 1 
+                    ORDER BY added_date DESC
+                """)
+                
+                blacklisted_users = cursor.fetchall()
+            
             stats = self.get_blacklist_statistics()
             
-            summary = f"📋 **Blacklist Summary**\n"
-            summary += f"🚫 Active Blocked Users: {stats['active_blacklisted']}\n"
-            summary += f"📊 Total Entries: {stats['total_blacklisted']}\n"
-            summary += f"🕒 Recent Additions (7d): {stats['recent_additions_7d']}\n\n"
+            # Build new format
+            summary = "🔄 **Blacklist Information (Updated)**\n\n"
             
-            if stats['top_reasons']:
-                summary += f"🔍 **Top Block Reasons:**\n"
-                for reason, count in stats['top_reasons'].items():
-                    summary += f"• {reason.title()}: {count}\n"
+            if blacklisted_users:
+                for user in blacklisted_users:
+                    user_id, username, reason, added_date = user
+                    username_display = f"@{username}" if username else f"User_{user_id}"
+                    summary += f"🚫 {username_display} (ID: {user_id})\n"
+            else:
+                summary += "✅ No users currently blacklisted\n"
+            
+            summary += f"\n📈 **Update Summary:**\n"
+            summary += f"• 📊 Total: {stats['active_blacklisted']}"
             
             return summary
             

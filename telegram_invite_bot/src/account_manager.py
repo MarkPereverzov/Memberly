@@ -140,6 +140,66 @@ class AccountManager:
         except Exception as e:
             logger.error(f"Error sending invitation via {account.session_name}: {e}")
             return False
+
+    async def add_user_to_group(self, account: UserAccount, user_id: int, group_id: int, invite_link: str = None) -> tuple[bool, str]:
+        """Add user directly to group"""
+        client = self.clients.get(account.session_name)
+        if not client:
+            logger.error(f"Client for account {account.session_name} not found")
+            return False, "Client not available"
+        
+        try:
+            # Get the proper chat object for the group
+            chat = None
+            
+            if invite_link:
+                # Use invite link to get chat info
+                try:
+                    chat = await client.get_chat(invite_link)
+                except Exception as e:
+                    logger.warning(f"Could not get chat from invite link {invite_link}: {e}")
+            
+            # If we still don't have chat, try using group_id directly
+            if not chat:
+                try:
+                    chat = await client.get_chat(group_id)
+                except Exception as e:
+                    logger.warning(f"Could not get chat with group_id {group_id}: {e}")
+                    return False, f"Invalid group ID: {group_id}"
+            
+            # Now try to add user using the chat object
+            await client.add_chat_members(chat.id, user_id)
+            
+            logger.info(f"User {user_id} added to group {chat.title} ({chat.id}) via account {account.session_name}")
+            return True, f"Successfully added to group {chat.title}"
+            
+        except FloodWait as e:
+            logger.warning(f"FloodWait for account {account.session_name}: waiting {e.value} seconds")
+            # Temporarily deactivate account
+            account.is_active = False
+            await asyncio.sleep(e.value)
+            account.is_active = True
+            return False, f"Rate limited, waiting {e.value} seconds"
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Handle specific error cases
+            if "user_privacy_restricted" in error_msg:
+                return False, "User privacy settings don't allow adding to groups"
+            elif "user_not_mutual_contact" in error_msg:
+                return False, "User must be a mutual contact to be added"
+            elif "user_already_participant" in error_msg:
+                return True, "User already in group"
+            elif "chat_admin_required" in error_msg:
+                return False, "Admin rights required to add users"
+            elif "too_many_requests" in error_msg:
+                return False, "Too many requests, try again later"
+            elif "peer id invalid" in error_msg:
+                return False, f"Invalid group ID: {group_id}"
+            else:
+                logger.error(f"Error adding user {user_id} to group {group_id} via {account.session_name}: {e}")
+                return False, f"Error: {str(e)}"
     
     async def check_user_in_group(self, account: UserAccount, user_id: int, group_id: int) -> bool:
         """Check if user is in group"""

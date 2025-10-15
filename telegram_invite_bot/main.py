@@ -233,10 +233,10 @@ To get an invitation, use the `/invite` command
             account = all_accounts[account_index % len(all_accounts)]
             account_index += 1
             
-            # Send invitation
+            # Add user directly to group
             try:
-                success = await self.account_manager.send_invite(
-                    account, user_id, group.invite_link
+                success, message = await self.account_manager.add_user_to_group(
+                    account, user_id, group.group_id, group.invite_link
                 )
                 
                 if success:
@@ -251,25 +251,25 @@ To get an invitation, use the `/invite` command
                         user_id, group.group_id, group.group_name, True
                     )
                     
-                    logger.info(f"Successfully invited user {user_id} to group {group.group_name}")
+                    logger.info(f"Successfully added user {user_id} to group {group.group_name}")
                 else:
-                    failed_invites.append(f"{group.group_name}: Failed to send invitation")
+                    failed_invites.append(f"{group.group_name}: {message}")
                     
                     # Record failed attempt
                     self.cooldown_manager.record_invite_attempt(user_id, group.group_id, False)
                     
                     # Record in database
                     self.database_manager.record_invitation(
-                        user_id, group.group_id, group.group_name, False, "Failed to send invitation"
+                        user_id, group.group_id, group.group_name, False, message
                     )
                     
             except Exception as e:
                 failed_invites.append(f"{group.group_name}: Error - {str(e)}")
-                logger.error(f"Error inviting user {user_id} to group {group.group_name}: {e}")
+                logger.error(f"Error adding user {user_id} to group {group.group_name}: {e}")
             
             # Small delay between invitations to avoid rate limiting
             if i < len(all_groups) - 1:  # Don't delay after the last invitation
-                await asyncio.sleep(1)
+                await asyncio.sleep(2)  # Increased delay for direct adding
         
         # Update user's last invite time
         self.cooldown_manager.update_user_last_invite_time(user_id)
@@ -292,7 +292,7 @@ To get an invitation, use the `/invite` command
         if not successful_invites and not failed_invites:
             result_message += "😔 No invitations were processed.\n"
         
-        result_message += "📩 Check your private messages for invitation links!"
+        result_message += "🎯 You have been directly added to the groups where possible!"
         
         await update.message.reply_text(result_message, parse_mode=ParseMode.MARKDOWN)
     
@@ -339,9 +339,10 @@ To get an invitation, use the `/invite` command
             help_text += "*User Management:*\n"
             help_text += "• `/whitelist @username (days)` - Add to whitelist\n"
             help_text += "• `/remove_whitelist @username` - Remove from whitelist\n"
-            help_text += "• `/blacklist (user_id) (reason)` - Add to blacklist\n"
-            help_text += "• `/unblacklist (user_id)` - Remove from blacklist\n"
-            help_text += "• `/blacklist_info [user_id]` - Show blacklist info\n"
+            help_text += "• `/blacklist @username (reason)` - Add to blacklist\n"
+            help_text += "• `/unblacklist @username` - Remove from blacklist\n"
+            help_text += "• `/blacklist_info (@username)` - Show blacklist info\n"
+            help_text += "• `/blacklist_info` - Show blacklist info of all users\n"
             
         elif self._is_whitelisted(user_id):
             # Whitelisted user commands
@@ -762,29 +763,43 @@ To get an invitation, use the `/invite` command
         
         if len(context.args) < 2:
             await update.message.reply_text(
-                "Usage: /blacklist <user_id> <reason>\n"
-                "Example: /blacklist 123456789 Spam behavior"
+                "Usage: /blacklist @username <reason>\n"
+                "Example: /blacklist @john_doe Spam behavior"
             )
             return
         
         try:
-            user_id = int(context.args[0])
+            username_arg = context.args[0]
             reason = " ".join(context.args[1:])
             
+            # Remove @ if present
+            username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
+            
+            # Try to get user_id from database
+            user_id = self.database_manager.get_user_id_by_username(username)
+            
+            if user_id is None:
+                await update.message.reply_text(
+                    f"⚠️ Cannot find user ID for @{username}. "
+                    f"The user needs to interact with the bot first by sending /start command. "
+                    f"After that, you can add them to blacklist."
+                )
+                return
+            
             success = self.blacklist_manager.add_user(
-                user_id, reason, update.effective_user.id
+                user_id, reason, update.effective_user.id, f"@{username}"
             )
             
             if success:
                 await update.message.reply_text(
-                    f"🚫 User {user_id} added to blacklist.\n"
+                    f"🚫 User @{username} (ID: {user_id}) added to blacklist.\n"
                     f"**Reason:** {reason}"
                 )
             else:
                 await update.message.reply_text("❌ Failed to add user to blacklist.")
                 
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID format.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error processing command: {str(e)}")
     
     async def unblacklist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /unblacklist command"""
@@ -793,21 +808,34 @@ To get an invitation, use the `/invite` command
             return
         
         if not context.args:
-            await update.message.reply_text("Usage: /unblacklist <user_id>")
+            await update.message.reply_text("Usage: /unblacklist @username")
             return
         
         try:
-            user_id = int(context.args[0])
+            username_arg = context.args[0]
+            
+            # Remove @ if present
+            username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
+            
+            # Try to get user_id from database
+            user_id = self.database_manager.get_user_id_by_username(username)
+            
+            if user_id is None:
+                await update.message.reply_text(
+                    f"⚠️ Cannot find user ID for @{username}. "
+                    f"User may not have interacted with the bot or was never blacklisted."
+                )
+                return
             
             success = self.blacklist_manager.remove_user(user_id)
             
             if success:
-                await update.message.reply_text(f"✅ User {user_id} removed from blacklist.")
+                await update.message.reply_text(f"✅ User @{username} (ID: {user_id}) removed from blacklist.")
             else:
-                await update.message.reply_text(f"❌ User {user_id} not found in blacklist.")
+                await update.message.reply_text(f"❌ User @{username} (ID: {user_id}) not found in blacklist.")
                 
-        except ValueError:
-            await update.message.reply_text("❌ Invalid user ID format.")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error processing command: {str(e)}")
     
     async def blacklist_info_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /blacklist_info command"""
@@ -815,29 +843,45 @@ To get an invitation, use the `/invite` command
             await update.message.reply_text("❌ This command is only available to administrators.")
             return
         
-        # If user_id provided, show specific user info
+        # If username provided, show specific user info
         if context.args:
             try:
-                user_id = int(context.args[0])
+                username_arg = context.args[0]
+                
+                # Remove @ if present
+                username = username_arg.replace('@', '') if username_arg.startswith('@') else username_arg
+                
+                # Try to get user_id from database
+                user_id = self.database_manager.get_user_id_by_username(username)
+                
+                if user_id is None:
+                    await update.message.reply_text(
+                        f"⚠️ Cannot find user ID for @{username}. "
+                        f"User may not have interacted with the bot."
+                    )
+                    return
+                
                 entry = self.blacklist_manager.get_user_info(user_id)
                 
                 if entry:
                     from datetime import datetime
                     added_date = datetime.fromtimestamp(entry.added_date)
                     
-                    info_text = f"🚫 **Blacklist Entry for User {user_id}**\n\n"
-                    info_text += f"**Username:** {entry.username or 'Not set'}\n"
-                    info_text += f"**Reason:** {entry.reason}\n"
-                    info_text += f"**Added by:** {entry.added_by}\n"
-                    info_text += f"**Added date:** {added_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
-                    info_text += f"**Status:** {'Active' if entry.is_active else 'Inactive'}"
+                    info_text = f"🔄 **Blacklist Information (Updated)**\n\n"
+                    info_text += f"🚫 @{username} (ID: {user_id})\n\n"
+                    info_text += f"📈 **Update Summary:**\n"
+                    info_text += f"• 📊 Total: 1\n"
+                    info_text += f"• 📝 Reason: {entry.reason}\n"
+                    info_text += f"• 👤 Added by: {entry.added_by}\n"
+                    info_text += f"• 📅 Added: {added_date.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    info_text += f"• ⚡ Status: {'Active' if entry.is_active else 'Inactive'}"
                     
                     await update.message.reply_text(info_text, parse_mode=ParseMode.MARKDOWN)
                 else:
-                    await update.message.reply_text(f"❌ User {user_id} not found in blacklist.")
+                    await update.message.reply_text(f"❌ User @{username} (ID: {user_id}) not found in blacklist.")
                     
-            except ValueError:
-                await update.message.reply_text("❌ Invalid user ID format.")
+            except Exception as e:
+                await update.message.reply_text(f"❌ Error processing command: {str(e)}")
         else:
             # Show blacklist summary
             summary = self.blacklist_manager.get_blacklist_summary()
