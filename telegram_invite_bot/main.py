@@ -455,7 +455,7 @@ To get an invitation, use the `/invite` command
             help_text += "*Group & Account Management:*\n"
             help_text += "• `/groups_info` - List groups with ID and members\n"
             help_text += "• `/accounts_info` - List accounts with statuses\n"
-            help_text += "• `/add_account` - Add new Telegram account\n"
+            help_text += "• `/add_account (name) (api_id) (api_hash) (phone)` - Add new Telegram account\n"
             help_text += "• `/add_group (name) (link)` - Add group (auto-detects ID)\n"
             help_text += "• `/remove_group (id)` - Remove group\n"
             help_text += "• `/join_groups` - Join all accounts to groups\n\n"
