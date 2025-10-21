@@ -67,7 +67,7 @@ docker-compose --version
    
    Or clone from Git (if you have a repository):
    ```bash
-   git clone https://github.com/yourusername/memberly.git /opt/memberly-bot
+   git clone https://github.com/MarkPereverzov/Memberly /opt/memberly-bot
    cd /opt/memberly-bot/telegram_invite_bot
    ```
 
