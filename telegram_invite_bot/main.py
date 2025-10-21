@@ -12,7 +12,7 @@ from typing import Dict, List
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.constants import ParseMode
 
 from config.config import ConfigManager, BotConfig, UserAccount
@@ -85,6 +85,10 @@ class InviteBot:
         self.bot_config = self.config_manager.bot_config
         self.application = None
         
+        # Storage for pending account authentications
+        # Format: {user_id: {'session_name': str, 'api_id': int, 'api_hash': str, 'phone': str, 'client': Client, 'stage': str}}
+        self.pending_auth = {}
+        
     async def initialize(self):
         """Bot initialization"""
         
@@ -115,6 +119,7 @@ class InviteBot:
         self.application.add_handler(CommandHandler("groups_info", self.groups_info_command))
         self.application.add_handler(CommandHandler("accounts_info", self.accounts_info_command))
         self.application.add_handler(CommandHandler("add_account", self.add_account_command))
+        self.application.add_handler(CommandHandler("remove_account", self.remove_account_command))
         self.application.add_handler(CommandHandler("add_group", self.add_group_command))
         self.application.add_handler(CommandHandler("remove_group", self.remove_group_command))
         self.application.add_handler(CommandHandler("join_groups", self.join_groups_command))
@@ -125,6 +130,9 @@ class InviteBot:
         self.application.add_handler(CommandHandler("blacklist", self.blacklist_command))
         self.application.add_handler(CommandHandler("unblacklist", self.unblacklist_command))
         self.application.add_handler(CommandHandler("blacklist_info", self.blacklist_info_command))
+        
+        # Message handler for authentication codes (must be last)
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_auth_message))
     
     def _is_admin(self, user_id: int) -> bool:
         """Check if user is an administrator"""
@@ -455,7 +463,8 @@ To get an invitation, use the `/invite` command
             help_text += "*Group & Account Management:*\n"
             help_text += "• `/groups_info` - List groups with ID and members\n"
             help_text += "• `/accounts_info` - List accounts with statuses\n"
-            help_text += "• `/add_account (name) (api_id) (api_hash) (phone)` - Add new Telegram account\n"
+            help_text += "• `/add_account (name) (api_id) (api_hash) (phone)` - Add new Telegram account (codes in chat)\n"
+            help_text += "• `/remove_account (name)` - Remove Telegram account\n"
             help_text += "• `/add_group (name) (link)` - Add group (auto-detects ID)\n"
             help_text += "• `/remove_group (id)` - Remove group\n"
             help_text += "• `/join_groups` - Join all accounts to groups\n\n"
@@ -881,27 +890,35 @@ To get an invitation, use the `/invite` command
         await update.message.reply_text(response_text)
     
     async def add_account_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handler for /add_account command - interactive account addition"""
+        """Handler for /add_account command - interactive account addition with in-chat authentication"""
         if not self._is_admin(update.effective_user.id):
-            await update.message.reply_text("⚠️ This command is only available to administrators.")
+            await update.message.reply_text("❌ This command is only available to administrators.")
             return
         
-        await update.message.reply_text(
-            "🔄 Add New Telegram Account\n\n"
-            "⚠️ How to get API credentials:\n"
-            "1. Go to https://my.telegram.org\n"
-            "2. Log in with your phone number\n"
-            "3. Go to 'API development tools'\n"
-            "4. Create an application (if you haven't already)\n"
-            "5. Copy your api_id and api_hash\n\n"
-            "⚠️ Important:\n"
-            "• Keep your API credentials secure\n"
-            "• Each account needs its own unique session_name\n"
-            "• The phone number must match the Telegram account"
-        )
-        
-        # Check if arguments are provided
+        # Show usage if no arguments
         if len(context.args) < 4:
+            await update.message.reply_text(
+                "� Add New Telegram Account\n\n"
+                "Format: /add_account <session_name> <api_id> <api_hash> <phone>\n\n"
+                "Example:\n"
+                "/add_account Account2 12345678 abc123def456 +1234567890\n\n"
+                "Parameters:\n"
+                "• session_name - Unique name for this account (e.g., Account2, MyBot1)\n"
+                "• api_id - Your Telegram API ID (from my.telegram.org)\n"
+                "• api_hash - Your Telegram API Hash (from my.telegram.org)\n"
+                "• phone - Phone number in international format (+1234567890)\n\n"
+                "How to get API credentials:\n"
+                "1. Go to https://my.telegram.org\n"
+                "2. Log in with your phone number\n"
+                "3. Go to 'API development tools'\n"
+                "4. Create an application (if you haven't already)\n"
+                "5. Copy your api_id and api_hash\n\n"
+                "⚠️ Important:\n"
+                "• Keep your API credentials secure\n"
+                "• Each account needs its own unique session_name\n"
+                "• The phone number must match the Telegram account\n"
+                "• You will enter verification codes here in the chat, not in terminal"
+            )
             return
         
         try:
@@ -913,7 +930,7 @@ To get an invitation, use the `/invite` command
             # Validate phone format
             if not phone.startswith('+'):
                 await update.message.reply_text(
-                    "⚠️ Invalid phone format. Phone number must start with '+' and include country code.\n"
+                    "❌ Invalid phone format. Phone number must start with '+' and include country code.\n"
                     "Example: +1234567890"
                 )
                 return
@@ -922,71 +939,121 @@ To get an invitation, use the `/invite` command
             existing_accounts = self.config_manager.load_accounts()
             if any(acc.session_name == session_name for acc in existing_accounts):
                 await update.message.reply_text(
-                    f"⚠️ Account with session name '{session_name}' already exists.\n"
+                    f"❌ Account with session name '{session_name}' already exists.\n"
                     "Please choose a different name."
                 )
                 return
             
             # Send status message
             status_msg = await update.message.reply_text(
-                f"🔄 Adding account '{session_name}'...\n"
-                "This will create a new session and may require authentication."
+                f"🔄 Initializing account '{session_name}'...\n"
+                "Creating Pyrogram session..."
             )
             
-            # Create new account
-            new_account = UserAccount(
-                session_name=session_name,
+            # Create client
+            from pyrogram import Client
+            
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            session_dir = os.path.join(script_dir, "data", "sessions")
+            
+            client = Client(
+                name=session_name,
                 api_id=api_id,
                 api_hash=api_hash,
-                phone=phone,
-                is_active=True,
-                groups_assigned=[]
+                phone_number=phone,
+                workdir=session_dir
             )
             
-            # Save to database
+            # Connect client without starting full authorization
+            await client.connect()
+            
+            # Send code
             try:
-                self.database_manager.add_account(
-                    session_name=session_name,
-                    api_id=api_id,
-                    api_hash=api_hash,
-                    phone=phone,
-                    is_active=True,
-                    groups_assigned=[]
-                )
+                sent_code = await client.send_code(phone)
                 
-                # Try to initialize the client
+                # Store pending auth data
+                self.pending_auth[update.effective_user.id] = {
+                    'session_name': session_name,
+                    'api_id': api_id,
+                    'api_hash': api_hash,
+                    'phone': phone,
+                    'client': client,
+                    'phone_code_hash': sent_code.phone_code_hash,
+                    'stage': 'phone_code'
+                }
+                
                 await status_msg.edit_text(
-                    f"🔄 Account '{session_name}' saved to database.\n"
-                    "Attempting to connect..."
+                    f"📱 Verification code sent to {phone}\n\n"
+                    f"✉️ Please enter the code you received (5 digits):\n"
+                    f"Just send the code as a message in this chat.\n\n"
+                    f"⚠️ Note: The code expires quickly, so enter it soon!"
                 )
                 
-                # Create client
-                from pyrogram import Client
-                import os
-                
-                script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                session_dir = os.path.join(script_dir, "telegram_invite_bot", "data", "sessions")
-                
-                client = Client(
-                    name=session_name,
-                    api_id=api_id,
-                    api_hash=api_hash,
-                    phone_number=phone,
-                    workdir=session_dir
+            except Exception as e:
+                await client.disconnect()
+                await status_msg.edit_text(
+                    f"❌ Failed to send verification code:\n"
+                    f"Error: {str(e)}\n\n"
+                    f"Please check:\n"
+                    f"• Phone number is correct and in international format\n"
+                    f"• API credentials are valid\n"
+                    f"• You have Telegram installed on this number"
                 )
+                logger.error(f"Error sending code for {session_name}: {e}")
                 
-                # Start client (this will trigger phone code request if needed)
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Invalid API ID. It must be a number.\n"
+                "Example: 12345678"
+            )
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error processing command: {str(e)}")
+            logger.error(f"Error in add_account_command: {e}")
+    
+    async def handle_auth_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle authentication messages (verification codes and 2FA passwords)"""
+        user_id = update.effective_user.id
+        
+        # Check if user has pending authentication
+        if user_id not in self.pending_auth:
+            return  # Not in auth process, ignore
+        
+        if not self._is_admin(user_id):
+            return  # Only admins can authenticate
+        
+        auth_data = self.pending_auth[user_id]
+        message_text = update.message.text.strip()
+        
+        try:
+            if auth_data['stage'] == 'phone_code':
+                # User is entering phone verification code
+                client = auth_data['client']
+                phone = auth_data['phone']
+                phone_code_hash = auth_data['phone_code_hash']
+                
                 try:
-                    await client.start()
+                    # Sign in with the code
+                    await client.sign_in(phone, phone_code_hash, message_text)
                     
-                    # Get user info
+                    # Check if 2FA is enabled
+                    # If sign_in succeeds without error, we're logged in
                     me = await client.get_me()
                     
-                    await client.stop()
+                    # Save account to database
+                    self.database_manager.add_account(
+                        session_name=auth_data['session_name'],
+                        api_id=auth_data['api_id'],
+                        api_hash=auth_data['api_hash'],
+                        phone=phone,
+                        is_active=True,
+                        groups_assigned=[]
+                    )
                     
-                    await status_msg.edit_text(
+                    await client.disconnect()
+                    
+                    await update.message.reply_text(
                         f"✅ Account added successfully!\n\n"
-                        f"📱 Session Name: {session_name}\n"
+                        f"📱 Session Name: {auth_data['session_name']}\n"
                         f"👤 User: {me.first_name} (@{me.username or 'N/A'})\n"
                         f"🆔 User ID: {me.id}\n"
                         f"📞 Phone: {phone}\n\n"
@@ -994,49 +1061,159 @@ To get an invitation, use the `/invite` command
                         f"Use /accounts_info to see all accounts."
                     )
                     
-                    # Reload accounts in account manager
-                    self.accounts = self.config_manager.load_accounts()
+                    # Remove from pending
+                    del self.pending_auth[user_id]
+                    
+                    # Reload accounts
                     await self.account_manager.initialize()
                     
                 except Exception as e:
-                    error_message = str(e)
+                    error_str = str(e)
                     
-                    if "phone_code" in error_message.lower():
-                        await status_msg.edit_text(
-                            f"⚠️ Phone code required!\n\n"
-                            f"Account '{session_name}' has been saved, but needs authentication.\n\n"
-                            f"Next steps:\n"
-                            f"1. Stop the bot\n"
-                            f"2. Run the bot again\n"
-                            f"3. Enter the verification code sent to {phone}\n"
-                            f"4. If 2FA is enabled, enter your password\n\n"
-                            f"The account will be activated after successful authentication."
+                    # Check if 2FA password is required
+                    if "Two-steps verification" in error_str or "password" in error_str.lower():
+                        auth_data['stage'] = '2fa_password'
+                        await update.message.reply_text(
+                            f"🔐 Two-Factor Authentication enabled\n\n"
+                            f"Please enter your 2FA password (cloud password):\n"
+                            f"Just send it as a message in this chat.\n\n"
+                            f"⚠️ Your password will be used only for authentication and not stored."
                         )
                     else:
-                        await status_msg.edit_text(
-                            f"⚠️ Account saved but connection failed\n\n"
-                            f"Session: '{session_name}'\n"
-                            f"Error: {error_message}\n\n"
-                            f"The account has been added to the database but may need manual authentication.\n"
-                            f"Please check the logs and restart the bot if necessary."
+                        await client.disconnect()
+                        await update.message.reply_text(
+                            f"❌ Failed to verify code:\n"
+                            f"Error: {error_str}\n\n"
+                            f"Please try again with /add_account command."
                         )
-                        
-            except Exception as e:
-                await status_msg.edit_text(
-                    f"⚠️ Failed to add account:\n"
-                    f"Error: {str(e)}\n\n"
-                    f"Please check your credentials and try again."
-                )
-                logger.error(f"Error adding account {session_name}: {e}")
+                        del self.pending_auth[user_id]
+                        logger.error(f"Error verifying code: {e}")
                 
-        except ValueError:
-            await update.message.reply_text(
-                "⚠️ Invalid API ID. It must be a number.\n"
-                "Example: 12345678"
-            )
+            elif auth_data['stage'] == '2fa_password':
+                # User is entering 2FA password
+                client = auth_data['client']
+                phone = auth_data['phone']
+                
+                try:
+                    # Check password
+                    await client.check_password(message_text)
+                    
+                    # Get user info
+                    me = await client.get_me()
+                    
+                    # Save account to database
+                    self.database_manager.add_account(
+                        session_name=auth_data['session_name'],
+                        api_id=auth_data['api_id'],
+                        api_hash=auth_data['api_hash'],
+                        phone=phone,
+                        is_active=True,
+                        groups_assigned=[]
+                    )
+                    
+                    await client.disconnect()
+                    
+                    await update.message.reply_text(
+                        f"✅ Account added successfully!\n\n"
+                        f"📱 Session Name: {auth_data['session_name']}\n"
+                        f"👤 User: {me.first_name} (@{me.username or 'N/A'})\n"
+                        f"🆔 User ID: {me.id}\n"
+                        f"📞 Phone: {phone}\n\n"
+                        f"✨ The account is now active and ready to use!\n"
+                        f"Use /accounts_info to see all accounts."
+                    )
+                    
+                    # Remove from pending
+                    del self.pending_auth[user_id]
+                    
+                    # Reload accounts
+                    await self.account_manager.initialize()
+                    
+                except Exception as e:
+                    await client.disconnect()
+                    await update.message.reply_text(
+                        f"❌ Failed to verify 2FA password:\n"
+                        f"Error: {str(e)}\n\n"
+                        f"Please try again with /add_account command."
+                    )
+                    del self.pending_auth[user_id]
+                    logger.error(f"Error verifying 2FA password: {e}")
+                    
         except Exception as e:
-            await update.message.reply_text(f"⚠️ Error processing command: {str(e)}")
-            logger.error(f"Error in add_account_command: {e}")
+            await update.message.reply_text(f"❌ Authentication error: {str(e)}")
+            if user_id in self.pending_auth:
+                try:
+                    await self.pending_auth[user_id]['client'].disconnect()
+                except:
+                    pass
+                del self.pending_auth[user_id]
+            logger.error(f"Error in handle_auth_message: {e}")
+    
+    async def remove_account_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handler for /remove_account command"""
+        if not self._is_admin(update.effective_user.id):
+            await update.message.reply_text("❌ This command is only available to administrators.")
+            return
+        
+        if not context.args:
+            await update.message.reply_text(
+                "Usage: /remove_account <session_name>\n\n"
+                "Example: /remove_account Account2\n\n"
+                "Use /accounts_info to see all available accounts."
+            )
+            return
+        
+        session_name = context.args[0]
+        
+        try:
+            # Check if account exists
+            existing_accounts = self.config_manager.load_accounts()
+            account_to_remove = None
+            
+            for acc in existing_accounts:
+                if acc.session_name == session_name:
+                    account_to_remove = acc
+                    break
+            
+            if not account_to_remove:
+                await update.message.reply_text(
+                    f"❌ Account '{session_name}' not found.\n\n"
+                    f"Use /accounts_info to see all available accounts."
+                )
+                return
+            
+            # Remove from database
+            success = self.database_manager.remove_account(session_name)
+            
+            if success:
+                # Try to delete session file
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                session_dir = os.path.join(script_dir, "data", "sessions")
+                session_file = os.path.join(session_dir, f"{session_name}.session")
+                
+                try:
+                    if os.path.exists(session_file):
+                        os.remove(session_file)
+                        logger.info(f"Deleted session file: {session_file}")
+                except Exception as e:
+                    logger.warning(f"Could not delete session file: {e}")
+                
+                await update.message.reply_text(
+                    f"✅ Account '{session_name}' removed successfully!\n\n"
+                    f"The account has been deleted from the database and its session file removed."
+                )
+                
+                # Reload accounts
+                await self.account_manager.initialize()
+                
+            else:
+                await update.message.reply_text(
+                    f"❌ Failed to remove account '{session_name}' from database."
+                )
+                
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error removing account: {str(e)}")
+            logger.error(f"Error in remove_account_command: {e}")
     
     async def blacklist_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handler for /blacklist command"""

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: memberly-invite-bot
+    restart: unless-stopped
+    
+    # Environment variables
+    env_file:
+      - .env
+    
+    # Volumes for persistent data
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+    
+    # Network mode (optional)
+    network_mode: bridge
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Health check (optional)
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
