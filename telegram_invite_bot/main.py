@@ -159,10 +159,17 @@ class InviteBot:
         
         user = update.effective_user
         
+        # Build greeting based on whitelist status
+        if self.whitelist_manager.is_user_whitelisted(user.id):
+            total_groups = len(self.group_manager.get_all_groups())
+            greeting = f"Hello, {user.first_name}! {total_groups} groups are currently available."
+        else:
+            greeting = f"Hello, {user.first_name}!"
+        
         welcome_text = f"""
 🤖 **Welcome to the Invite Bot!**
 
-Hello, {user.first_name}! 
+{greeting}
 
 This bot will help you get invitations to our groups.
 
